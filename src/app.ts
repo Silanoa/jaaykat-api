@@ -34,6 +34,12 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
   const app = Fastify({
     logger: config.nodeEnv === "test" ? false : { level: "info" },
   });
+  app.addHook("onRequest", async (req) => {
+    const contentType = req.headers["content-type"];
+    if (req.url.startsWith("/webhooks/bitnob") && typeof contentType === "string" && contentType.includes(",")) {
+      req.headers["content-type"] = contentType.split(",")[0]?.trim() ?? contentType;
+    }
+  });
   app.removeContentTypeParser("application/json");
   app.addContentTypeParser("application/json", { parseAs: "buffer" }, (req, body, done) => {
     const buffer = body as Buffer;
@@ -67,12 +73,12 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
           : 60;
       return reply.code(429).send({
         error: "RATE_LIMITED",
-        message: "Trop de tentatives. Réessayez dans un instant.",
+        message: "Trop de tentatives. RÃƒÂ©essayez dans un instant.",
         retryAfterSeconds,
       });
     }
     const name = error instanceof Error ? error.name : "Error";
-    request.log.error({ name }, "erreur interne");
+    request.log.error({ name, code: (error as { code?: unknown }).code, detail: error instanceof Error ? error.message : undefined, contentType: request.headers["content-type"], contentEncoding: request.headers["content-encoding"] }, "erreur interne");
     return reply.code(500).send({ error: "INTERNAL", message: "Une erreur est survenue." });
   });
 

@@ -86,8 +86,19 @@ describe("webhooks Bitnob", () => {
     expect(bitnob.invoiceGets).toHaveLength(0);
   });
 
-  it("confirme par GET puis ignore le doublon", async () => {
-    const { app, db, bitnob, invoiceId, bitnobId } = await boot();
+  it("accepte l'en-tête Content-Type dupliqué envoyé par Bitnob (constaté en sandbox)", async () => {
+    const { app } = await boot();
+    const raw = JSON.stringify({ event: "webhook.test", data: { test: true } });
+    const res = await app.inject({
+      method: "POST",
+      url: "/webhooks/bitnob",
+      headers: { "content-type": "application/json, application/json", "x-bitnob-signature": sign(raw) },
+      payload: raw,
+    });
+    expect(res.statusCode).toBe(200);
+  });
+
+  it("confirme par GET puis ignore le doublon", async () => {    const { app, db, bitnob, invoiceId, bitnobId } = await boot();
     const raw = JSON.stringify({
       event_id: "evt_ok",
       event: "btc.lightning.received.success",
