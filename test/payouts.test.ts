@@ -46,12 +46,13 @@ describe("retraits et ledger", () => {
     };
   }
 
-  async function boot() {
+  async function boot(opts?: { payoutRate?: number }) {
     const db = openDatabase(":memory:");
     const bitnob = new MockBitnobClient({
       clientId: "mock",
       clientSecret: "mock",
       settleAfterMs: 0,
+      payoutRate: opts?.payoutRate,
       now: () => now.getTime(),
     });
     const cfg = config();
@@ -198,4 +199,39 @@ describe("retraits et ledger", () => {
     expect(left.json().lastPayouts[0].status).toBe("completed");
     expect(JSON.stringify(left.json())).not.toContain("771234567");
   });
+  it("redemande un devis au taux réel pour que le montant reçu soit celui demandé", async () => {
+    const { app, db, bitnob, token, merchantId } = await boot({ payoutRate: 590.6 });
+    credit(db, merchantId, 10_000, "live");
+    const headers = { authorization: `Bearer ${token}` };
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/payouts/quote",
+      headers,
+      payload: { amountXof: 2000, network: "wave", accountNumber: "771234567", accountName: "Awa Diop" },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().quote.receivedXof).toBe(2000);
+    expect(res.json().quote.exchangeRate).toBe("590.6");
+    expect(bitnob.quoteRequests).toHaveLength(2);
+    expect(bitnob.quoteRequests[0]?.amount).toBe("3.389831");
+    expect(bitnob.quoteRequests[1]?.amount).toBe("3.386387");
+    expect(bitnob.quoteRequests[1]?.reference).toBe(`${bitnob.quoteRequests[0]?.reference}_r`);
+    const row = db.prepare("SELECT reference FROM payouts").get() as { reference: string };
+    expect(row.reference).toBe(bitnob.quoteRequests[1]?.reference);
+  });
+
+  it("ne redemande pas de devis quand le taux supposé suffit", async () => {
+    const { app, db, bitnob, token, merchantId } = await boot();
+    credit(db, merchantId, 10_000, "live");
+    const headers = { authorization: `Bearer ${token}` };
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/payouts/quote",
+      headers,
+      payload: { amountXof: 2000, network: "wave", accountNumber: "771234567", accountName: "Awa Diop" },
+    });
+    expect(res.json().quote.receivedXof).toBe(2000);
+    expect(bitnob.quoteRequests).toHaveLength(1);
+  });
+
 });

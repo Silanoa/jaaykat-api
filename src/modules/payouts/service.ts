@@ -110,19 +110,34 @@ export async function quotePayout(
   pendingAccounts.set(id, account);
 
   try {
-    const remote = await bitnob.payouts.quote({
-      amount: (input.amountXof / XOF_PER_STABLE).toFixed(6),
+    const quoteInput = {
       country: "SN",
       fromAsset: config.payoutFromAsset,
       toCurrency: "XOF",
-      source: "offchain",
+      source: "offchain" as const,
+    };
+    let quotedReference = reference;
+    let remote = await bitnob.payouts.quote({
+      ...quoteInput,
+      amount: (input.amountXof / XOF_PER_STABLE).toFixed(6),
       reference,
     });
+    const rate = Number(remote.exchangeRate);
+    const settled = Number(remote.settlementAmount);
+    if (rate > 0 && settled > 0 && Math.abs(settled - input.amountXof) >= 0.5) {
+      quotedReference = `${reference}_r`;
+      remote = await bitnob.payouts.quote({
+        ...quoteInput,
+        amount: (Math.ceil((input.amountXof / rate) * 1e6) / 1e6).toFixed(6),
+        reference: quotedReference,
+      });
+    }
     db.prepare(
       `UPDATE payouts
-       SET bitnob_quote_id = ?, from_amount = ?, exchange_rate = ?, fees = ?, quote_expires_at = ?, updated_at = ?
+       SET reference = ?, bitnob_quote_id = ?, from_amount = ?, exchange_rate = ?, fees = ?, quote_expires_at = ?, updated_at = ?
        WHERE id = ?`,
     ).run(
+      quotedReference,
       remote.id,
       remote.fromAmount,
       remote.exchangeRate,
