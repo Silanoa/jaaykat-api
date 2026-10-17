@@ -7,7 +7,7 @@ import { ulid } from "../ids.js";
 import { makeRequireAuth } from "../auth/require-auth.js";
 import { dashboardFromSales, type DashboardRange } from "../modules/analytics/dashboard.js";
 import type { SalePoint } from "../modules/analytics/types.js";
-import { toInvoiceJson, type InvoiceRow } from "../modules/invoices/service.js";
+import type { InvoiceRow } from "../modules/invoices/service.js";
 import { scoreFromSales, type ScoreResult } from "../modules/score/formula.js";
 
 function loadSales(db: Database, merchantId: string): SalePoint[] {
@@ -53,11 +53,57 @@ function scorePayload(score: ScoreResult, now: Date) {
     score: score.score,
     band: score.band,
     eligible: score.eligible,
-    components: score.components,
-    actions: score.actions.map((action) => ({ text: action.text, points: action.points })),
-    progress: { days: score.progress.days, sales: score.progress.sales, daysRequired: 14, salesRequired: 20 },
-    windowDays: score.windowDays,
     computedAt: now.toISOString(),
+    progress: {
+      daysSinceFirst: score.progress.days,
+      salesCount: score.progress.sales,
+    },
+    components: [
+      { key: "regularity" as const, value: score.components.regularity },
+      { key: "growth" as const, value: score.components.growth },
+      { key: "volume" as const, value: score.components.volume },
+      { key: "loyalty" as const, value: score.components.fidelity },
+      { key: "quality" as const, value: score.components.quality },
+    ],
+    actions: score.actions.map((action) => ({ text: action.text, points: action.points })),
+  };
+}
+
+function presentDashboard(result: ReturnType<typeof dashboardFromSales>) {
+  const heatmap = result.heatmap.flatMap((row, weekday) =>
+    row.map((cell, hour) => ({
+      weekday,
+      hour,
+      salesCount: cell.count,
+      revenueXof: cell.revenueXof,
+    })),
+  );
+  const hours = Array.from({ length: 24 }, () => 0);
+  for (const cell of heatmap) hours[cell.hour] = (hours[cell.hour] ?? 0) + cell.revenueXof;
+  let peakLabel: string | null = null;
+  let best = 0;
+  for (let hour = 0; hour < 23; hour++) {
+    const revenue = (hours[hour] ?? 0) + (hours[hour + 1] ?? 0);
+    if (revenue > best) {
+      best = revenue;
+      peakLabel = `${hour} h – ${hour + 2} h`;
+    }
+  }
+  return {
+    range: result.range,
+    kpis: {
+      revenueXof: result.kpis.revenueXof,
+      revenueDeltaPct: result.kpis.deltaPct,
+      salesCount: result.kpis.salesCount,
+      averageBasketXof: result.kpis.averageBasketXof,
+      conversionRate: result.kpis.conversion,
+      medianPaySeconds: result.kpis.medianPayDelaySeconds,
+      bestDay: result.kpis.bestDay,
+      peakLabel,
+    },
+    heatmap,
+    loyal: result.loyal,
+    advice: { text: result.advice.text, figures: null, priority: result.advice.priority },
   };
 }
 
@@ -74,7 +120,7 @@ export function registerAnalyticsRoutes(app: FastifyInstance, db: Database, conf
     if (!req.auth) throw new AppError(401, "UNAUTHENTICATED", "Connexion requise.");
     const query = req.query as { range?: string };
     const range = parseRange(query.range);
-    return dashboardFromSales(loadSales(db, req.auth.merchantId), range, config.now());
+    return presentDashboard(dashboardFromSales(loadSales(db, req.auth.merchantId), range, config.now()));
   });
 
   app.get("/api/score", { preHandler: requireAuth }, async (req) => {
@@ -103,8 +149,14 @@ export function registerAnalyticsRoutes(app: FastifyInstance, db: Database, conf
     if (!req.auth) throw new AppError(401, "UNAUTHENTICATED", "Connexion requise.");
     const query = req.query as { from?: string; to?: string };
     const rows = db
-      .prepare("SELECT * FROM invoices WHERE merchant_id = ? ORDER BY created_at DESC")
-      .all(req.auth.merchantId) as InvoiceRow[];
+      .prepare(
+        `SELECT i.*, p.nickname AS payer_nickname
+         FROM invoices i
+         LEFT JOIN payers p ON p.id = i.payer_id
+         WHERE i.merchant_id = ?
+         ORDER BY i.created_at DESC`,
+      )
+      .all(req.auth.merchantId) as (InvoiceRow & { payer_nickname: string | null })[];
     const items = rows
       .filter((row) => {
         const at = Date.parse(row.paid_at ?? row.created_at);
@@ -112,7 +164,18 @@ export function registerAnalyticsRoutes(app: FastifyInstance, db: Database, conf
         if (query.to && at > Date.parse(query.to)) return false;
         return true;
       })
-      .map((row) => toInvoiceJson(row, false));
+      .map((row) => ({
+        id: row.id,
+        status: row.status,
+        amountXof: row.amount_xof,
+        amountSats: row.amount_sats,
+        createdAt: row.created_at,
+        paidAt: row.paid_at,
+        label: row.description,
+        channel: row.channel,
+        source: row.source,
+        payerNickname: row.payer_nickname,
+      }));
     return { items };
   });
 }
@@ -130,17 +193,17 @@ export function readPublicShare(db: Database, token: string, now: Date) {
     .get(token) as
     | { expiresAt: string; revoked: number; shopName: string; components: string; computedAt: string }
     | undefined;
-  if (!share || share.revoked || share.expiresAt <= now.toISOString()) {
-    throw new AppError(404, "NOT_FOUND", "Attestation introuvable.");
-  }
+  if (!share) throw new AppError(404, "NOT_FOUND", "Attestation introuvable.");
   const score = JSON.parse(share.components) as ScoreResult;
+  const status = share.revoked ? "revoked" : share.expiresAt <= now.toISOString() ? "expired" : "valid";
   return {
     shopName: share.shopName,
     score: score.score,
     band: score.band,
-    periodDays: score.windowDays,
+    period: `${score.windowDays} jours`,
     salesCount: score.progress.sales,
     computedAt: share.computedAt,
     expiresAt: share.expiresAt,
+    status,
   };
 }

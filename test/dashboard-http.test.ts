@@ -69,6 +69,8 @@ describe("dashboard et score HTTP", () => {
     const body = attestation.json();
     expect(body.shopName).toBe("Awa Beauté");
     expect(body.band).toBe("B");
+    expect(body.status).toBe("valid");
+    expect(body.period).toBe("90 jours");
     expect(JSON.stringify(body)).not.toMatch(/amount|payer|phone/i);
   });
 });

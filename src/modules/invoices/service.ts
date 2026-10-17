@@ -51,6 +51,7 @@ export interface InvoiceJson {
   channel: InvoiceRow["channel"];
   source: InvoiceRow["source"];
   reference: string;
+  paymentHash: string | null;
   simulated: boolean;
 }
 
@@ -67,6 +68,7 @@ export function toInvoiceJson(row: InvoiceRow, simulated: boolean): InvoiceJson 
     channel: row.channel,
     source: row.source,
     reference: row.reference,
+    paymentHash: row.payment_hash,
     simulated: simulated && row.source === "live",
   };
 }
@@ -306,7 +308,7 @@ export async function getPublicShop(db: Database, slug: string): Promise<{ name:
     | { display_name: string; category: string | null }
     | undefined;
   if (!row) throw new AppError(404, "NOT_FOUND", "Boutique introuvable.");
-  return { name: row.display_name, category: row.category };
+  return { name: row.display_name, category: row.category ?? "autre" };
 }
 
 export async function createPublicInvoice(

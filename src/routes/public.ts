@@ -58,7 +58,7 @@ export function registerPublicRoutes(
       payerPhone: body.payerPhone,
       deviceId: body.deviceId,
     });
-    return reply.code(201).send(invoice);
+    return reply.code(201).send({ invoice });
   });
 
   app.get("/api/public/invoices/:id", limit, async (req) => {

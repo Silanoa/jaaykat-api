@@ -61,10 +61,11 @@ describe("webhooks Bitnob", () => {
       headers: { authorization: `Bearer ${token}`, "idempotency-key": "77777777-7777-7777-7777-777777777777" },
       payload: { amountXof: 2500 },
     });
+    const invoiceId = invoice.json().invoice.id as string;
     const bitnobId = (
-      db.prepare("SELECT bitnob_invoice_id AS id FROM invoices WHERE id = ?").get(invoice.json().id) as { id: string }
+      db.prepare("SELECT bitnob_invoice_id AS id FROM invoices WHERE id = ?").get(invoiceId) as { id: string }
     ).id;
-    return { app, db, bitnob, invoiceId: invoice.json().id as string, bitnobId };
+    return { app, db, bitnob, invoiceId, bitnobId };
   }
 
   it("refuse une signature invalide sans changer la facture", async () => {

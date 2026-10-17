@@ -70,7 +70,7 @@ describe("factures", () => {
       payload: { amountXof: 2500, label: "Huile" },
     });
     expect(res.statusCode).toBe(201);
-    const invoice = res.json();
+    const invoice = res.json().invoice;
     const rate = 64_000 * 605;
     expect(invoice.status).toBe("pending");
     expect(invoice.amountXof).toBe(2500);
@@ -89,8 +89,8 @@ describe("factures", () => {
       headers: { authorization: `Bearer ${token}` },
     });
     expect(paid.statusCode).toBe(200);
-    expect(paid.json().status).toBe("paid");
-    expect(paid.json().paidAt).toBe("2026-10-17T18:00:00.000Z");
+    expect(paid.json().invoice.status).toBe("paid");
+    expect(paid.json().invoice.paidAt).toBe("2026-10-17T18:00:00.000Z");
     expect(bitnob.invoiceGets).toHaveLength(1);
   });
 
@@ -100,8 +100,8 @@ describe("factures", () => {
     const first = await app.inject({ method: "POST", url: "/api/invoices", headers, payload: { amountXof: 1000 } });
     const second = await app.inject({ method: "POST", url: "/api/invoices", headers, payload: { amountXof: 1000 } });
     expect(second.statusCode).toBe(200);
-    expect(second.json().id).toBe(first.json().id);
-    expect(second.json().reference).toBe(first.json().reference);
+    expect(second.json().invoice.id).toBe(first.json().invoice.id);
+    expect(second.json().invoice.reference).toBe(first.json().invoice.reference);
     expect(bitnob.invoiceCreates).toBe(1);
   });
 
@@ -113,8 +113,8 @@ describe("factures", () => {
     expect(failed.json().error).toBe("BITNOB_UNAVAILABLE");
     const retried = await app.inject({ method: "POST", url: "/api/invoices", headers, payload: { amountXof: 1500 } });
     expect(retried.statusCode).toBe(201);
-    expect(retried.json().status).toBe("pending");
-    expect(bitnob.references).toEqual([retried.json().reference, retried.json().reference]);
+    expect(retried.json().invoice.status).toBe("pending");
+    expect(bitnob.references).toEqual([retried.json().invoice.reference, retried.json().invoice.reference]);
   });
 
   it("ne relit Bitnob qu'une fois toutes les 2 secondes", async () => {
@@ -125,7 +125,7 @@ describe("factures", () => {
       headers: { authorization: `Bearer ${token}`, "idempotency-key": "44444444-4444-4444-4444-444444444444" },
       payload: { amountXof: 500 },
     });
-    const id = created.json().id as string;
+    const id = created.json().invoice.id as string;
     const headers = { authorization: `Bearer ${token}` };
     await app.inject({ method: "GET", url: `/api/invoices/${id}`, headers });
     await app.inject({ method: "GET", url: `/api/invoices/${id}`, headers });
@@ -143,10 +143,10 @@ describe("factures", () => {
       headers: { authorization: `Bearer ${token}`, "idempotency-key": "55555555-5555-5555-5555-555555555555" },
       payload: { amountXof: 2500 },
     });
-    expect(created.json().status).toBe("pending");
+    expect(created.json().invoice.status).toBe("pending");
     now = new Date("2026-10-17T18:00:21.000Z");
     await reconcilePending(db, bitnob, cfg, app.invoicePolls);
-    const row = db.prepare("SELECT status, settle_method FROM invoices WHERE id = ?").get(created.json().id) as {
+    const row = db.prepare("SELECT status, settle_method FROM invoices WHERE id = ?").get(created.json().invoice.id) as {
       status: string;
       settle_method: string;
     };

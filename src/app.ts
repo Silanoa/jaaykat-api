@@ -12,6 +12,7 @@ import { reconcilePending } from "./reconciler.js";
 import { registerAnalyticsRoutes } from "./routes/analytics.js";
 import { registerAuthRoutes } from "./routes/auth.js";
 import { registerInvoiceRoutes } from "./routes/invoices.js";
+import { registerPayoutRoutes } from "./routes/payouts.js";
 import { registerPublicRoutes } from "./routes/public.js";
 import { registerWebhookRoute } from "./routes/webhooks.js";
 
@@ -75,7 +76,11 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
     return reply.code(500).send({ error: "INTERNAL", message: "Une erreur est survenue." });
   });
 
-  app.get("/api/health", async () => ({ ok: true, bitnob: bitnobEnv }));
+  app.get("/api/health", async () => ({
+    ok: true,
+    bitnob: bitnobEnv === "mock" || bitnobEnv === "sandbox" || bitnobEnv === "live",
+    mode: bitnobEnv,
+  }));
 
   registerAuthRoutes(app, db, bitnob, config);
   const rates = new RateCache();
@@ -83,6 +88,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
   registerPublicRoutes(app, db, bitnob, config, rates, polls);
   registerWebhookRoute(app, db, bitnob, config);
   registerAnalyticsRoutes(app, db, config);
+  registerPayoutRoutes(app, db, bitnob, config, rates);
   if (config.reconcileIntervalMs > 0) {
     const timer = setInterval(() => {
       void reconcilePending(db, bitnob, config, polls);
