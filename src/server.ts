@@ -11,7 +11,6 @@ const app = Fastify({ logger: true });
 app.get("/api/health", async () => ({
   ok: true,
   bitnob: "not-wired",
-  hint: "Implémenter selon SPEC.md",
 }));
 
 await app.register(fastifyStatic, {

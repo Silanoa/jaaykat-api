@@ -1,11 +1,13 @@
-# SPEC — jaaykat-api (piste backend)
+# Design — jaaykat-api
 
-**Owner :** toi  
-**Stack :** Node 22, Fastify 5, better-sqlite3 (WAL), zod, TypeScript, `@silanoa/bitnob-lite`  
-**Done checkpoints :**
-- **20h00** : téléphone → tunnel → 2500 F → QR → paid &lt; 15 s + ligne SQLite
-- **00h00** : client scanne affiche → paid sur téléphone marchand ; payout quote OK
-- **09h00** : parcours complet ; rate-limit ; scrub logs ; SDK depuis npm
+Date : 2026-10-17  
+Statut : prêt pour implémentation  
+Stack : Node 22, Fastify 5, better-sqlite3 (WAL), zod, TypeScript, `@silanoa/bitnob-lite`
+
+Checkpoints démo :
+- 20h00 — tunnel → 2500 F → QR → paid &lt; 15 s
+- 00h00 — client scanne affiche → paid côté marchand ; payout quote
+- 09h00 — parcours complet ; rate-limit ; SDK depuis npm
 
 ---
 

@@ -1,52 +1,24 @@
 # jaaykat-api
 
-Backend Jaaykat — Fastify + SQLite + Bitnob (via `@silanoa/bitnob-lite`).
+Backend Jaaykat — Fastify + SQLite + Bitnob via `@silanoa/bitnob-lite`.
 
-**Point d’entrée jury / soumission** : ce README + liens vers [bitnob-lite](https://github.com/Silanoa/bitnob-lite) et [jaaykat-web](https://github.com/Silanoa/jaaykat-web).
+Repos d’entrée soumission : ce repo + [bitnob-lite](https://github.com/Silanoa/bitnob-lite) + [jaaykat-web](https://github.com/Silanoa/jaaykat-web).
 
-## Spec
+## Docs
 
-→ [SPEC.md](./SPEC.md)
+- [AGENTS.md](./AGENTS.md)
+- [Design](./docs/superpowers/specs/2026-10-17-jaaykat-api-design.md)
+- [Plan](./docs/superpowers/plans/2026-10-17-jaaykat-api-implementation.md)
+- [DEPLOY.md](./docs/DEPLOY.md)
+- [CONTRACTS.md](./docs/CONTRACTS.md)
 
-## Architecture (démo)
-
-Laptop (`:3000`) sert l’API **et** la PWA (`public/` = build de `jaaykat-web`).  
-Exposé en HTTPS via `cloudflared`. Seul ce process appelle Bitnob (IP whitelist).
-
-## Setup
+## Run
 
 ```bash
-# Prérequis : bitnob-lite clone en ../bitnob-lite (ou npm après publish)
-cp .env.example .env   # remplir secrets
+cp .env.example .env
 pnpm install
-pnpm seed
 pnpm dev
 ```
 
-Sync PWA :
-
-```powershell
-cd ..\jaaykat-web; pnpm build
-Copy-Item -Recurse -Force dist\* ..\jaaykat-api\public\
-```
-
-Tunnel :
-
-```bash
-cloudflared tunnel --url http://localhost:3000
-# PUBLIC_URL=https://….trycloudflare.com + webhook Bitnob
-```
-
-## Repos liés
-
-| Repo | Rôle |
-|------|------|
-| [bitnob-lite](https://github.com/Silanoa/bitnob-lite) | SDK |
-| [jaaykat-web](https://github.com/Silanoa/jaaykat-web) | PWA |
-| [DEPLOY](https://github.com/Silanoa/jaaykat-api/blob/main/docs/DEPLOY.md) | Déploiement démo |
-
-## Honnêteté démo
-
-- Historique 60 j = `source=seed` (simulé)
-- Paiements sandbox = `auto_settle` (simulés)
-- Pas d’encaissement Wave/OM via Bitnob — mobile money = retrait
+Le process sert aussi la PWA depuis `public/` (build de `jaaykat-web`).  
+Démo : `cloudflared tunnel --url http://localhost:3000` — seule cette machine appelle Bitnob (IP whitelist).
