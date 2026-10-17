@@ -29,6 +29,7 @@ export interface MockBitnobOptions extends BitnobClientOptions {
   settleAfterMs?: number;
   failCustomers?: boolean | BitnobError;
   failNextInvoices?: number;
+  payoutRate?: number;
   now?: () => number;
 }
 
@@ -40,6 +41,7 @@ export class MockBitnobClient implements BitnobClient {
   readonly invoiceGets: string[] = [];
   readonly payoutGets: string[] = [];
   readonly references: string[] = [];
+  readonly quoteRequests: QuoteInput[] = [];
   invoiceCreates = 0;
   private failNextInvoices: number;
   private readonly invoices = new Map<string, MockInvoice>();
@@ -48,12 +50,14 @@ export class MockBitnobClient implements BitnobClient {
   private readonly customerRows = new Map<string, CustomerInput & { id: string }>();
   private readonly settleAfterMs: number;
   private readonly failCustomers: boolean | BitnobError;
+  private readonly payoutRate: number;
   private readonly now: () => number;
 
   constructor(opts: MockBitnobOptions = { clientId: "mock", clientSecret: "mock" }) {
     this.settleAfterMs = opts.settleAfterMs ?? 5_000;
     this.failCustomers = opts.failCustomers ?? false;
     this.failNextInvoices = opts.failNextInvoices ?? 0;
+    this.payoutRate = opts.payoutRate ?? 590;
     this.now = opts.now ?? Date.now;
   }
 
@@ -177,16 +181,20 @@ export class MockBitnobClient implements BitnobClient {
     },
     limits: async () => ({ min: 100, max: 200_000, currency: "XOF" }),
     quote: async (input: QuoteInput): Promise<PayoutQuote> => {
+      if (this.quoteRequests.some((request) => request.reference === input.reference)) {
+        throw new BitnobError(`payout with reference '${input.reference}' already exists`, { status: 409, path: "/api/payouts/quotes" });
+      }
+      this.quoteRequests.push(input);
       const id = `qt_${ulid()}`;
       const fromAmount = Number(input.amount);
-      const settlement = input.toCurrency === "XOF" ? (fromAmount * 590).toFixed(2) : input.amount;
+      const settlement = input.toCurrency === "XOF" ? (fromAmount * this.payoutRate).toFixed(2) : input.amount;
       const quote: MockQuote = {
         id,
         fromAsset: input.fromAsset,
         fromAmount: input.amount,
         toCurrency: input.toCurrency,
         settlementAmount: settlement,
-        exchangeRate: "590",
+        exchangeRate: String(this.payoutRate),
         fees: "0",
         expiresAt: new Date(this.now() + 16 * 60 * 1000),
         reference: input.reference,

@@ -64,3 +64,9 @@ Bitnob envoie ses webhooks avec l'en-tête `Content-Type: application/json, appl
 ## Webhook : configuration constatée
 
 Le formulaire « Create a webhook » du dashboard n'a que quatre champs : Name, Endpoint URL, Signing secret (à saisir soi-même), Retry count. Aucun choix d'événements : tous les événements arrivent sur l'URL.
+
+## Arrondi du devis de retrait : 2 000 F devenait 2 001 F, puis 2 002 F
+
+Le devis envoyait `montant / 590` USDT. Le taux effectif de Bitnob varie (589,5 à 590,6 constaté le 2026-10-17) et reste au-dessus de 590 : 2 000 F donnaient 2 001,01 puis 2 002,02 F de `settlement_amount`. Ce n'est ni un arrondi ni un problème de formatage : le marchand aurait reçu plus que le solde débité.
+
+Correction : après le premier devis, si `settlement_amount` s'écarte de 0,5 F ou plus du montant demandé, l'API redemande un devis avec `ceil(montant / exchange_rate, 6 décimales)` USDT, ce qui donne le montant demandé à moins de 0,01 F près. Bitnob refuse une `reference` déjà utilisée (409 `payout with reference ... already exists`) : le second devis porte la référence suffixée `_r`, et la ligne `payouts` garde cette référence. Le premier devis expire seul.
