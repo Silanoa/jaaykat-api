@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import type { Database } from "better-sqlite3";
 import { z } from "zod";
+import { resolveBitnobEnv } from "../bitnob/environment.js";
 import type { BitnobClient } from "../bitnob/types.js";
 import type { AppConfig } from "../config.js";
 import { AppError } from "../errors.js";
@@ -103,7 +104,7 @@ export function registerPayoutRoutes(
       .prepare("SELECT 1 AS ok FROM invoices WHERE merchant_id = ? AND source = 'seed' LIMIT 1")
       .get(req.auth.merchantId) as { ok: number } | undefined;
     return {
-      env: config.bitnobMode,
+      env: await resolveBitnobEnv(bitnob, config),
       platformBalances: balances.assets,
       lastCalls,
       seedHistory: Boolean(seed),

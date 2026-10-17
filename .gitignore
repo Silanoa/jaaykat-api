@@ -11,3 +11,4 @@ public/
 *.log
 .DS_Store
 .superpowers/
+docs/sandbox-findings.local.md
