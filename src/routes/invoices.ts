@@ -34,12 +34,13 @@ export function registerInvoiceRoutes(
       { amountXof: body.amountXof ?? Number.NaN, label: body.label },
       idempotencyKey(req.headers["idempotency-key"]),
     );
-    return reply.code(result.created ? 201 : 200).send(result.invoice);
+    return reply.code(result.created ? 201 : 200).send({ invoice: result.invoice });
   });
 
   app.get("/api/invoices/:id", { preHandler: requireAuth }, async (req) => {
     if (!req.auth) throw new AppError(401, "UNAUTHENTICATED", "Connexion requise.");
     const params = req.params as { id: string };
-    return getMerchantInvoice(db, bitnob, config, polls, req.auth.merchantId, params.id);
+    const invoice = await getMerchantInvoice(db, bitnob, config, polls, req.auth.merchantId, params.id);
+    return { invoice };
   });
 }

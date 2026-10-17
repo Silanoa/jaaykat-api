@@ -1,26 +1,12 @@
-import Fastify from "fastify";
-import { join, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
-import fastifyStatic from "@fastify/static";
+import { buildApp } from "./app.js";
+import { createBitnobClient } from "./bitnob/factory.js";
+import { loadConfig } from "./config.js";
+import { openDatabase } from "./db/client.js";
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const port = Number(process.env.PORT ?? 3000);
+const config = loadConfig();
+const db = openDatabase(config.databasePath);
+const bitnob = createBitnobClient(config);
+const bitnobEnv = config.bitnobMode === "live" ? "live" : "mock";
+const app = await buildApp({ db, bitnob, config, bitnobEnv });
 
-const app = Fastify({ logger: true });
-
-app.get("/api/health", async () => ({
-  ok: true,
-  bitnob: "not-wired",
-}));
-
-await app.register(fastifyStatic, {
-  root: join(__dirname, "..", "public"),
-  wildcard: false,
-});
-
-app.setNotFoundHandler((_req, reply) => {
-  return reply.sendFile("index.html");
-});
-
-await app.listen({ host: "0.0.0.0", port });
-console.log(`jaaykat-api listening on :${port}`);
+await app.listen({ host: "0.0.0.0", port: config.port });

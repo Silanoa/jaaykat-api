@@ -68,16 +68,17 @@ describe("public et fichiers", () => {
       payload: { slug: "awa-beaute", amountXof: 2500, payerName: "Fatou", payerPhone: "77 000 00 01" },
     });
     expect(created.statusCode).toBe(201);
-    expect(created.json().status).toBe("pending");
-    expect(created.json().channel).toBe("static_qr");
-    expect(created.json().bolt11).toMatch(/^lntb/);
+    const invoice = created.json().invoice;
+    expect(invoice.status).toBe("pending");
+    expect(invoice.channel).toBe("static_qr");
+    expect(invoice.bolt11).toMatch(/^lntb/);
 
-    const polled = await app.inject({ method: "GET", url: `/api/public/invoices/${created.json().id}` });
+    const polled = await app.inject({ method: "GET", url: `/api/public/invoices/${invoice.id}` });
     expect(polled.statusCode).toBe(200);
     expect(polled.json()).toEqual({
       status: "paid",
       amountXof: 2500,
-      expiresAt: created.json().expiresAt,
+      expiresAt: invoice.expiresAt,
     });
     expect(polled.json().bolt11).toBeUndefined();
   });
@@ -109,6 +110,9 @@ describe("public et fichiers", () => {
     const spa = await app.inject({ method: "GET", url: "/p/awa-beaute" });
     expect(spa.statusCode).toBe(200);
     expect(spa.body).toContain("Jaaykat");
+    const attestation = await app.inject({ method: "GET", url: "/s/token-demo" });
+    expect(attestation.statusCode).toBe(200);
+    expect(attestation.body).toContain("Jaaykat");
     const api = await app.inject({ method: "GET", url: "/api/does-not-exist" });
     expect(api.statusCode).toBe(404);
     expect(api.json().error).toBe("NOT_FOUND");
