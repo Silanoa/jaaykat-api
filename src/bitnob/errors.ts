@@ -50,9 +50,12 @@ export class BitnobRateLimitError extends BitnobError {
 }
 
 export class BitnobIpNotWhitelistedError extends BitnobError {
-  constructor(path: string, body?: unknown) {
+  constructor(path: string, body?: unknown, outgoingIp?: string | null) {
+    const ip = outgoingIp
+      ? `Autorisez l'IP sortante ${outgoingIp}.`
+      : "Autorisez l'IP affichée par curl -4 https://api.ipify.org.";
     super(
-      "IP non autorisée. Vérifiez l'IP sortante (curl -4 https://api.ipify.org), coupez VPN/WARP, mettez à jour la liste de la clé.",
+      `IP non autorisée. ${ip} Coupez VPN et WARP, puis mettez à jour la liste de la clé Bitnob.`,
       { status: 403, path, body, code: "IP_NOT_WHITELISTED", title: "IP address not whitelisted" },
     );
     this.name = "BitnobIpNotWhitelistedError";

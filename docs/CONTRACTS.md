@@ -113,7 +113,7 @@ Erreurs : `{ error: "CODE", message: "…", … }` — codes : `VALIDATION`, `PH
 
 ### Santé et jury
 
-`/api/health` : `bitnob` est un booléen (client joignable en mock, sandbox ou live) ; `mode` vaut `mock`, `sandbox` ou `live`. `/api/system` : `{ env, platformBalances, lastCalls: [{ at, method, path, status, durationMs, correlationId }], seedHistory }`. `env` suit `BITNOB_MODE` (`mock` ou `live`) tant que `whoami` n'a pas confirmé `sandbox`.
+`/api/health` : `bitnob` est un booléen (client joignable en mock, sandbox ou live) ; `mode` vaut `mock`, `sandbox` ou `live`. `/api/system` : `{ env, platformBalances, lastCalls: [{ at, method, path, status, durationMs, correlationId }], seedHistory }`. En `BITNOB_MODE=live`, `env` vient de `whoami` (cache 60 s) et retombe sur `live` si l'appel échoue. En mock, `env` reste `mock`.
 
 ## 3. Web → stockage local
 
