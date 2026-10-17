@@ -39,6 +39,7 @@ describe("retraits et ledger", () => {
       payerPepper: "payer-pepper-0123456789abcdef",
       publicDir: "/tmp/jaaykat-no-public",
       autoSettle: true,
+      demoPayMode: "auto",
       payoutFromAsset: "USDT",
       reconcileIntervalMs: 0,
       now: () => now,

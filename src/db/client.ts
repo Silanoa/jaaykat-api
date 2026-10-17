@@ -13,7 +13,13 @@ export function openDatabase(path: string): Database.Database {
   const version = db.pragma("user_version", { simple: true }) as number;
   if (version < 1) {
     db.exec(schemaSql);
-    db.pragma("user_version = 1");
+    db.pragma("user_version = 2");
+  } else if (version < 2) {
+    const columns = db.prepare("PRAGMA table_info(invoices)").all() as { name: string }[];
+    if (!columns.some((column) => column.name === "simulated_method")) {
+      db.exec("ALTER TABLE invoices ADD COLUMN simulated_method TEXT");
+    }
+    db.pragma("user_version = 2");
   }
   return db;
 }

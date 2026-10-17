@@ -36,6 +36,7 @@ describe("webhooks Bitnob", () => {
       payerPepper: "payer-pepper-0123456789abcdef",
       publicDir: "/tmp/jaaykat-no-public",
       autoSettle: true,
+      demoPayMode: "auto",
       payoutFromAsset: "USDT",
       reconcileIntervalMs: 0,
       now: () => new Date("2026-10-17T18:00:00.000Z"),

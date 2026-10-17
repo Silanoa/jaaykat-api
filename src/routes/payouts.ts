@@ -105,6 +105,7 @@ export function registerPayoutRoutes(
       .get(req.auth.merchantId) as { ok: number } | undefined;
     return {
       env: await resolveBitnobEnv(bitnob, config),
+      demoPayMode: config.demoPayMode,
       platformBalances: balances.assets,
       lastCalls,
       seedHistory: Boolean(seed),

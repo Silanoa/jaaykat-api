@@ -42,6 +42,7 @@ describe("public et fichiers", () => {
       payerPepper: "payer-pepper-0123456789abcdef",
       publicDir,
       autoSettle: true,
+      demoPayMode: "auto",
       payoutFromAsset: "USDT",
       reconcileIntervalMs: 0,
       now,
@@ -79,6 +80,8 @@ describe("public et fichiers", () => {
       status: "paid",
       amountXof: 2500,
       expiresAt: invoice.expiresAt,
+      demoPayment: false,
+      payMethod: null,
     });
     expect(polled.json().bolt11).toBeUndefined();
   });

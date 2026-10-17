@@ -62,6 +62,7 @@ CREATE TABLE invoices (
   settle_method TEXT,
   preimage TEXT,
   source TEXT NOT NULL DEFAULT 'live' CHECK (source IN ('live','seed')),
+  simulated_method TEXT,
   created_at TEXT NOT NULL,
   expires_at TEXT,
   paid_at TEXT
