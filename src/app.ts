@@ -11,6 +11,7 @@ import { RateCache } from "./modules/rates/service.js";
 import { reconcilePending } from "./reconciler.js";
 import { registerAuthRoutes } from "./routes/auth.js";
 import { registerInvoiceRoutes } from "./routes/invoices.js";
+import { registerPublicRoutes } from "./routes/public.js";
 
 declare module "fastify" {
   interface FastifyInstance {
@@ -62,6 +63,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
   registerAuthRoutes(app, db, bitnob, config);
   const rates = new RateCache();
   registerInvoiceRoutes(app, db, bitnob, config, rates, polls);
+  registerPublicRoutes(app, db, bitnob, config, rates, polls);
   if (config.reconcileIntervalMs > 0) {
     const timer = setInterval(() => {
       void reconcilePending(db, bitnob, config, polls);
