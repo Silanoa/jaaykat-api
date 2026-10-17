@@ -10,3 +10,4 @@ public/
 !public/.gitkeep
 *.log
 .DS_Store
+.superpowers/
