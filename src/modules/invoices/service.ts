@@ -10,7 +10,7 @@ import type { RateCache } from "../rates/service.js";
 
 const IDEMPOTENCY_MS = 10 * 60 * 1000;
 const INVOICE_TTL_MS = 15 * 60 * 1000;
-const PAY_METHODS = ["wave", "orange", "free", "expresso"] as const;
+const PAY_METHODS = ["lightning", "wave", "orange", "free", "expresso"] as const;
 
 export type PayMethod = (typeof PAY_METHODS)[number];
 
@@ -69,6 +69,7 @@ export interface PublicInvoiceJson {
   expiresAt: string | null;
   demoPayment: boolean;
   payMethod: PayMethod | null;
+  bolt11?: string;
 }
 
 function isPayMethod(value: string): value is PayMethod {
@@ -131,6 +132,7 @@ function publicView(config: AppConfig, row: InvoiceRow): PublicInvoiceJson {
     expiresAt: row.expires_at,
     demoPayment: isDemoPayment(config, row),
     payMethod: readPayMethod(row.simulated_method),
+    ...(row.simulated_method === "lightning" && row.bolt11 ? { bolt11: row.bolt11 } : {}),
   };
 }
 

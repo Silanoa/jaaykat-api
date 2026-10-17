@@ -182,6 +182,50 @@ describe("DEMO_PAY_MODE", () => {
     expect(bitnob.invoiceGets).toHaveLength(1);
   });
 
+  it("accepte le portefeuille Lightning et expose la facture bolt11 seulement pour ce moyen", async () => {
+    const { app, token, creates } = await boot("manual", 0);
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/invoices",
+      headers: { authorization: `Bearer ${token}`, "idempotency-key": "demo-lightning-1" },
+      payload: { amountXof: 2500 },
+    });
+    const id = created.json().invoice.id as string;
+    const before = await app.inject({ method: "GET", url: `/api/public/invoices/${id}` });
+    expect(before.json().bolt11).toBeUndefined();
+
+    const paid = await app.inject({ method: "POST", url: `/api/public/invoices/${id}/pay`, payload: { method: "lightning" } });
+    expect(paid.statusCode).toBe(200);
+    expect(paid.json().payMethod).toBe("lightning");
+    expect(paid.json().status).toBe("pending");
+    expect(paid.json().bolt11).toMatch(/^ln/);
+    expect(creates).toHaveLength(1);
+    expect(creates[0]?.autoSettle).toBe(true);
+
+    const polled = await app.inject({ method: "GET", url: `/api/public/invoices/${id}` });
+    expect(polled.json().status).toBe("paid");
+    expect(polled.json().payMethod).toBe("lightning");
+    expect(polled.json().bolt11).toMatch(/^ln/);
+
+    const merchant = await app.inject({ method: "GET", url: `/api/invoices/${id}`, headers: { authorization: `Bearer ${token}` } });
+    expect(merchant.json().invoice.payMethod).toBe("lightning");
+  });
+
+  it("n'expose pas bolt11 pour un paiement Wave", async () => {
+    const { app, token } = await boot("manual", 0);
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/invoices",
+      headers: { authorization: `Bearer ${token}`, "idempotency-key": "demo-wave-nobolt" },
+      payload: { amountXof: 1500 },
+    });
+    const id = created.json().invoice.id as string;
+    const paid = await app.inject({ method: "POST", url: `/api/public/invoices/${id}/pay`, payload: { method: "wave" } });
+    expect(paid.json().bolt11).toBeUndefined();
+    const polled = await app.inject({ method: "GET", url: `/api/public/invoices/${id}` });
+    expect(polled.json().bolt11).toBeUndefined();
+  });
+
   it("répond 404 en mode auto", async () => {
     const { app, token, bitnob } = await boot("auto", 60_000);
     const created = await app.inject({
