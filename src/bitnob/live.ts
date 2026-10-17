@@ -99,7 +99,7 @@ export class LiveBitnobClient implements BitnobClient {
     getInvoice: async (id) => this.parseInvoice(await this.request("GET", `/api/lightning/invoices/${encodeURIComponent(id)}`)),
     listInvoices: async () => this.request("GET", "/api/lightning/invoices"),
     decode: async () => {
-      throw new BitnobError("Le décodage BOLT11 complet reste à constater sur le sandbox.", { status: 501, path: "decode" });
+      throw new BitnobError("Le dÃ©codage BOLT11 complet reste Ã  constater sur le sandbox.", { status: 501, path: "decode" });
     },
     waitForPaid: async (id, options) => {
       const timeoutMs = options?.timeoutMs ?? 15_000;
@@ -150,7 +150,7 @@ export class LiveBitnobClient implements BitnobClient {
         throw new BitnobError("Taux Bitnob indisponibles.", { status: 502, path: "/api/exchange-rates" });
       }
       const quotes = new Map<string, RateQuote>();
-      for (const quote of [...extractQuotes(exchange), ...extractQuotes(prices)]) {
+      for (const quote of [...extractObservedQuotes(exchange, prices), ...extractQuotes(exchange), ...extractQuotes(prices)]) {
         if (!quotes.has(quote.pair)) quotes.set(quote.pair, quote);
       }
       const btcUsd = quotes.get("BTCUSD");
@@ -169,7 +169,7 @@ export class LiveBitnobClient implements BitnobClient {
       const snapshot = await this.rates.get();
       if (fiat === "USD") return btc * snapshot.btcUsd.mid;
       if (snapshot.btcXof) return btc * snapshot.btcXof.mid;
-      return btc * snapshot.btcUsd.sell * snapshot.usdXof.buy;
+      return btc * snapshot.btcUsd.mid * snapshot.usdXof.mid;
     },
   };
 
@@ -245,7 +245,7 @@ export class LiveBitnobClient implements BitnobClient {
         signal: AbortSignal.timeout(this.timeoutMs),
       });
     } catch (error) {
-      const message = error instanceof Error ? error.message : "réseau";
+      const message = error instanceof Error ? error.message : "rÃ©seau";
       this.onRequest?.({ method, path, status: 0, durationMs: this.now().getTime() - started, attempt });
       throw new BitnobError(this.safe(message), { status: 0, path });
     }
@@ -280,7 +280,7 @@ export class LiveBitnobClient implements BitnobClient {
 
   private parseInvoice(payload: unknown, fallbackSats = 0): LightningInvoice {
     const parsed = invoiceSchema.safeParse(unwrap(payload));
-    if (!parsed.success) throw new BitnobError("Réponse facture Bitnob inattendue.", { status: 502, path: "/api/lightning/invoices", body: payload });
+    if (!parsed.success) throw new BitnobError("RÃ©ponse facture Bitnob inattendue.", { status: 502, path: "/api/lightning/invoices", body: payload });
     const row = parsed.data;
     const id = row.id !== undefined ? String(row.id) : "";
     if (!id) throw new BitnobError("Identifiant de facture Bitnob absent.", { status: 502, path: "/api/lightning/invoices", body: payload });
@@ -301,9 +301,9 @@ export class LiveBitnobClient implements BitnobClient {
   }
 
   private safe(message: string): string {
-    if (!message) return "La requête Bitnob a échoué.";
-    if (this.clientSecret && message.includes(this.clientSecret)) return "La requête Bitnob a échoué.";
-    if (this.clientId && message.includes(this.clientId)) return "La requête Bitnob a échoué.";
+    if (!message) return "La requÃªte Bitnob a Ã©chouÃ©.";
+    if (this.clientSecret && message.includes(this.clientSecret)) return "La requÃªte Bitnob a Ã©chouÃ©.";
+    if (this.clientId && message.includes(this.clientId)) return "La requÃªte Bitnob a Ã©chouÃ©.";
     return message;
   }
 }
@@ -454,7 +454,7 @@ function parseQuote(payload: unknown, input: QuoteInput): PayoutQuote {
       settlement_amount: z.union([z.string(), z.number()]).optional(),
       settlementAmount: z.union([z.string(), z.number()]).optional(),
       received_amount: z.union([z.string(), z.number()]).optional(),
-      exchange_rate: z.union([z.string(), z.number()]).optional(),
+      exchange_rate: z.union([z.string(), z.number(), z.object({ rate: z.union([z.string(), z.number()]).optional(), effective_rate: z.union([z.string(), z.number()]).optional() }).passthrough()]).optional(),
       exchangeRate: z.union([z.string(), z.number()]).optional(),
       rate: z.union([z.string(), z.number()]).optional(),
       fees: z.union([z.string(), z.number()]).optional(),
@@ -465,13 +465,13 @@ function parseQuote(payload: unknown, input: QuoteInput): PayoutQuote {
       country: z.string().optional(),
     })
     .passthrough()
-    .safeParse(unwrap(payload));
-  if (!parsed.success) throw new BitnobError("Réponse de devis Bitnob inattendue.", { status: 502, path: "/api/payouts/quotes", body: payload });
+    .safeParse(unwrapPayout(payload));
+  if (!parsed.success) throw new BitnobError("RÃ©ponse de devis Bitnob inattendue.", { status: 502, path: "/api/payouts/quotes", body: payload });
   const row = parsed.data;
   const id = row.id ?? row.quote_id;
   const expiry = row.expires_at ?? row.expiresAt;
   if (id === undefined || expiry === undefined) {
-    throw new BitnobError("Champs du devis Bitnob à constater (id ou échéance).", { status: 502, path: "/api/payouts/quotes", body: payload });
+    throw new BitnobError("Champs du devis Bitnob Ã  constater (id ou Ã©chÃ©ance).", { status: 502, path: "/api/payouts/quotes", body: payload });
   }
   const settlement = row.settlement_amount ?? row.settlementAmount ?? row.received_amount;
   return {
@@ -480,7 +480,9 @@ function parseQuote(payload: unknown, input: QuoteInput): PayoutQuote {
     fromAmount: String(row.from_amount ?? input.amount),
     toCurrency: row.to_currency || input.toCurrency,
     settlementAmount: settlement === undefined ? "" : String(settlement),
-    exchangeRate: String(row.exchange_rate ?? row.exchangeRate ?? row.rate ?? ""),
+    exchangeRate: String(
+        (typeof row.exchange_rate === "object" ? (row.exchange_rate.effective_rate ?? row.exchange_rate.rate) : row.exchange_rate) ?? row.exchangeRate ?? row.rate ?? "",
+      ),
     fees: String(row.fees ?? row.fee ?? "0"),
     expiresAt: parseBitnobDate(expiry),
     reference: row.reference || input.reference,
@@ -501,10 +503,10 @@ function assertBeneficiary(body: InitializePayoutInput): void {
   const account = body.beneficiary.account_number;
   const network = body.beneficiary.network;
   if (typeof account !== "string" || !SN_ACCOUNT.test(account)) {
-    throw new BitnobError("Numéro mobile money invalide.", { status: 422, path: "/api/payouts/initialize" });
+    throw new BitnobError("NumÃ©ro mobile money invalide.", { status: 422, path: "/api/payouts/initialize" });
   }
   if (typeof network !== "string" || !isNetwork(network)) {
-    throw new BitnobError("Réseau mobile money invalide.", { status: 422, path: "/api/payouts/initialize" });
+    throw new BitnobError("RÃ©seau mobile money invalide.", { status: 422, path: "/api/payouts/initialize" });
   }
 }
 
@@ -518,8 +520,8 @@ function parsePayout(payload: unknown, quoteId: string): Payout {
       reference: z.string().optional(),
     })
     .passthrough()
-    .safeParse(unwrap(payload));
-  if (!parsed.success) throw new BitnobError("Réponse payout Bitnob inattendue.", { status: 502, path: "/api/payouts", body: payload });
+    .safeParse(unwrapPayout(payload));
+  if (!parsed.success) throw new BitnobError("RÃ©ponse payout Bitnob inattendue.", { status: 502, path: "/api/payouts", body: payload });
   const id = parsed.data.id ?? parsed.data.payout_id;
   if (id === undefined) throw new BitnobError("Identifiant de retrait Bitnob absent.", { status: 502, path: "/api/payouts", body: payload });
   return {
@@ -571,7 +573,7 @@ function readId(payload: unknown): string {
 }
 
 function readMessage(body: unknown): string {
-  if (!body || typeof body !== "object") return "La requête Bitnob a échoué.";
+  if (!body || typeof body !== "object") return "La requÃªte Bitnob a Ã©chouÃ©.";
   const record = body as Record<string, unknown>;
   if (typeof record.message === "string") return record.message;
   if (typeof record.detail === "string") return record.detail;
@@ -581,7 +583,7 @@ function readMessage(body: unknown): string {
     if (typeof nested.message === "string") return nested.message;
     if (typeof nested.detail === "string") return nested.detail;
   }
-  return "La requête Bitnob a échoué.";
+  return "La requÃªte Bitnob a Ã©chouÃ©.";
 }
 
 function hasReference(body: unknown): boolean {
@@ -629,4 +631,39 @@ async function lookupPublicIp(): Promise<string | null> {
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** Formes constatï¿½es en sandbox (2026-10-17): exchange-rates = data.rates[{target_currency (CFA = XOF), buy_rate, sell_rate}], trading/prices = data.prices[{base_currency, quote_currency, price}]. */
+function extractObservedQuotes(exchange: unknown, prices: unknown): RateQuote[] {
+  const out: RateQuote[] = [];
+  const rates = (unwrap(exchange) as { rates?: unknown } | null)?.rates;
+  if (Array.isArray(rates)) {
+    for (const row of rates as Array<Record<string, unknown>>) {
+      const target = String(row.target_currency ?? "").toUpperCase();
+      if (target !== "CFA" && target !== "XOF") continue;
+      const buy = num(row.buy_rate);
+      const sell = num(row.sell_rate);
+      if (buy === null || sell === null) continue;
+      out.push({ pair: "USDXOF", mid: (buy + sell) / 2, buy, sell, validForSeconds: 60 });
+    }
+  }
+  const list = (unwrap(prices) as { prices?: unknown } | null)?.prices;
+  if (Array.isArray(list)) {
+    for (const row of list as Array<Record<string, unknown>>) {
+      const base = String(row.base_currency ?? "").toUpperCase();
+      const quote = String(row.quote_currency ?? "").toUpperCase();
+      const price = num(row.price);
+      if (base === "BTC" && (quote === "USDC" || quote === "USDT" || quote === "USD") && price !== null && price > 0) {
+        out.push({ pair: "BTCUSD", mid: price, buy: price, sell: price, validForSeconds: 60 });
+      }
+    }
+  }
+  return out;
+}
+
+/** Le devis payout arrive sous data.payout (constatï¿½); sinon data. */
+function unwrapPayout(payload: unknown): unknown {
+  const data = unwrap(payload);
+  if (data && typeof data === "object" && "payout" in data) return (data as { payout: unknown }).payout;
+  return data;
 }
