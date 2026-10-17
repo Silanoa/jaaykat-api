@@ -99,7 +99,7 @@ export class LiveBitnobClient implements BitnobClient {
     getInvoice: async (id) => this.parseInvoice(await this.request("GET", `/api/lightning/invoices/${encodeURIComponent(id)}`)),
     listInvoices: async () => this.request("GET", "/api/lightning/invoices"),
     decode: async () => {
-      throw new BitnobError("Le dÃ©codage BOLT11 complet reste Ã  constater sur le sandbox.", { status: 501, path: "decode" });
+      throw new BitnobError("Le décodage BOLT11 complet reste à constater sur le sandbox.", { status: 501, path: "decode" });
     },
     waitForPaid: async (id, options) => {
       const timeoutMs = options?.timeoutMs ?? 15_000;
@@ -245,7 +245,7 @@ export class LiveBitnobClient implements BitnobClient {
         signal: AbortSignal.timeout(this.timeoutMs),
       });
     } catch (error) {
-      const message = error instanceof Error ? error.message : "rÃ©seau";
+      const message = error instanceof Error ? error.message : "réseau";
       this.onRequest?.({ method, path, status: 0, durationMs: this.now().getTime() - started, attempt });
       throw new BitnobError(this.safe(message), { status: 0, path });
     }
@@ -280,7 +280,7 @@ export class LiveBitnobClient implements BitnobClient {
 
   private parseInvoice(payload: unknown, fallbackSats = 0): LightningInvoice {
     const parsed = invoiceSchema.safeParse(unwrap(payload));
-    if (!parsed.success) throw new BitnobError("RÃ©ponse facture Bitnob inattendue.", { status: 502, path: "/api/lightning/invoices", body: payload });
+    if (!parsed.success) throw new BitnobError("Réponse facture Bitnob inattendue.", { status: 502, path: "/api/lightning/invoices", body: payload });
     const row = parsed.data;
     const id = row.id !== undefined ? String(row.id) : "";
     if (!id) throw new BitnobError("Identifiant de facture Bitnob absent.", { status: 502, path: "/api/lightning/invoices", body: payload });
@@ -301,9 +301,9 @@ export class LiveBitnobClient implements BitnobClient {
   }
 
   private safe(message: string): string {
-    if (!message) return "La requÃªte Bitnob a Ã©chouÃ©.";
-    if (this.clientSecret && message.includes(this.clientSecret)) return "La requÃªte Bitnob a Ã©chouÃ©.";
-    if (this.clientId && message.includes(this.clientId)) return "La requÃªte Bitnob a Ã©chouÃ©.";
+    if (!message) return "La requête Bitnob a échoué.";
+    if (this.clientSecret && message.includes(this.clientSecret)) return "La requête Bitnob a échoué.";
+    if (this.clientId && message.includes(this.clientId)) return "La requête Bitnob a échoué.";
     return message;
   }
 }
@@ -466,12 +466,12 @@ function parseQuote(payload: unknown, input: QuoteInput): PayoutQuote {
     })
     .passthrough()
     .safeParse(unwrapPayout(payload));
-  if (!parsed.success) throw new BitnobError("RÃ©ponse de devis Bitnob inattendue.", { status: 502, path: "/api/payouts/quotes", body: payload });
+  if (!parsed.success) throw new BitnobError("Réponse de devis Bitnob inattendue.", { status: 502, path: "/api/payouts/quotes", body: payload });
   const row = parsed.data;
   const id = row.id ?? row.quote_id;
   const expiry = row.expires_at ?? row.expiresAt;
   if (id === undefined || expiry === undefined) {
-    throw new BitnobError("Champs du devis Bitnob Ã  constater (id ou Ã©chÃ©ance).", { status: 502, path: "/api/payouts/quotes", body: payload });
+    throw new BitnobError("Champs du devis Bitnob à constater (id ou échéance).", { status: 502, path: "/api/payouts/quotes", body: payload });
   }
   const settlement = row.settlement_amount ?? row.settlementAmount ?? row.received_amount;
   return {
@@ -503,10 +503,10 @@ function assertBeneficiary(body: InitializePayoutInput): void {
   const account = body.beneficiary.account_number;
   const network = body.beneficiary.network;
   if (typeof account !== "string" || !SN_ACCOUNT.test(account)) {
-    throw new BitnobError("NumÃ©ro mobile money invalide.", { status: 422, path: "/api/payouts/initialize" });
+    throw new BitnobError("Numéro mobile money invalide.", { status: 422, path: "/api/payouts/initialize" });
   }
   if (typeof network !== "string" || !isNetwork(network)) {
-    throw new BitnobError("RÃ©seau mobile money invalide.", { status: 422, path: "/api/payouts/initialize" });
+    throw new BitnobError("Réseau mobile money invalide.", { status: 422, path: "/api/payouts/initialize" });
   }
 }
 
@@ -521,7 +521,7 @@ function parsePayout(payload: unknown, quoteId: string): Payout {
     })
     .passthrough()
     .safeParse(unwrapPayout(payload));
-  if (!parsed.success) throw new BitnobError("RÃ©ponse payout Bitnob inattendue.", { status: 502, path: "/api/payouts", body: payload });
+  if (!parsed.success) throw new BitnobError("Réponse payout Bitnob inattendue.", { status: 502, path: "/api/payouts", body: payload });
   const id = parsed.data.id ?? parsed.data.payout_id;
   if (id === undefined) throw new BitnobError("Identifiant de retrait Bitnob absent.", { status: 502, path: "/api/payouts", body: payload });
   return {
@@ -573,7 +573,7 @@ function readId(payload: unknown): string {
 }
 
 function readMessage(body: unknown): string {
-  if (!body || typeof body !== "object") return "La requÃªte Bitnob a Ã©chouÃ©.";
+  if (!body || typeof body !== "object") return "La requête Bitnob a échoué.";
   const record = body as Record<string, unknown>;
   if (typeof record.message === "string") return record.message;
   if (typeof record.detail === "string") return record.detail;
@@ -583,7 +583,7 @@ function readMessage(body: unknown): string {
     if (typeof nested.message === "string") return nested.message;
     if (typeof nested.detail === "string") return nested.detail;
   }
-  return "La requÃªte Bitnob a Ã©chouÃ©.";
+  return "La requête Bitnob a échoué.";
 }
 
 function hasReference(body: unknown): boolean {
