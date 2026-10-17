@@ -44,7 +44,8 @@ Erreurs : `{ error: "CODE", message: "…", … }` — codes : `VALIDATION`, `PH
 | POST | `/api/invoices` | Bearer + `Idempotency-Key` | `{amountXof, label?}` → `{ invoice }` |
 | GET | `/api/invoices/:id` | Bearer | polling 2 s → `{ invoice }` |
 | POST | `/api/public/invoices` | non, rate-limit | `{slug, amountXof, payerName?, payerPhone?, deviceId?}` → `{ invoice }` |
-| GET | `/api/public/invoices/:id` | non | `{status, amountXof, expiresAt}` seulement |
+| GET | `/api/public/invoices/:id` | non | plat, sans `bolt11` : `{status, amountXof, expiresAt, demoPayment, payMethod}` |
+| POST | `/api/public/invoices/:id/pay` | non, rate-limit | `DEMO_PAY_MODE=manual` seulement. Corps `{ method: "wave"\|"orange"\|"free"\|"expresso" }` → plat `{status, amountXof, expiresAt, demoPayment, payMethod}` |
 | GET | `/api/public/shops/:slug` | non | `{name, category}` |
 | GET | `/api/public/shares/:token` | non, rate-limit | attestation, voir ci-dessous |
 | GET | `/api/sales?from&to` | Bearer | `{ items }` |
@@ -62,7 +63,7 @@ Erreurs : `{ error: "CODE", message: "…", … }` — codes : `VALIDATION`, `PH
 | GET | `/api/payouts/:id` | Bearer → `{ payout }` |
 | GET | `/api/rates` | non → `{ btcXof, btcUsd, usdXof, ts, validFor, source }` |
 | GET | `/api/system` | Bearer (jury) |
-| GET | `/api/health` | non → `{ ok, bitnob, mode }` |
+| GET | `/api/health` | non → `{ ok, bitnob, mode, demoPayMode }` |
 | POST | `/webhooks/bitnob` | HMAC Bitnob (pas le front) |
 
 ### Auth (champs)
@@ -71,25 +72,61 @@ Erreurs : `{ error: "CODE", message: "…", … }` — codes : `VALIDATION`, `PH
 
 ### Forme invoice
 
-`POST` marchand, `GET` marchand et `POST` public renvoient l'enveloppe `{ "invoice": { … } }`. `GET /api/public/invoices/:id` reste plat, sans `bolt11`.
+`POST` marchand, `GET` marchand et `POST` public renvoient l'enveloppe `{ "invoice": { … } }`. `GET /api/public/invoices/:id` et `POST /api/public/invoices/:id/pay` restent plats, sans `bolt11`.
 
 ```json
 {
   "id": "01J…",
   "status": "creating|pending|paid|expired|failed",
   "amountXof": 2500,
-  "amountSats": 4230,
+  "amountSats": 6457,
   "bolt11": "lntb…",
-  "expiresAt": "2026-10-18T…",
+  "expiresAt": "2026-10-17T18:15:00.000Z",
   "paidAt": null,
   "label": null,
   "channel": "dynamic|static_qr",
   "source": "live|seed",
-  "paymentHash": null
+  "reference": "jk_awa-beaute_01J…",
+  "paymentHash": null,
+  "simulated": true,
+  "demoPayment": false,
+  "payMethod": null,
+  "payUrl": null
 }
 ```
 
-`paymentHash` est absent ou nul tant que Bitnob ne l'a pas renvoyé. `reference` et `simulated` peuvent accompagner l'objet ; la PWA peut les ignorer.
+`paymentHash` est nul tant que Bitnob ne l'a pas renvoyé. `simulated` est vrai pour une vente `live` si `BITNOB_AUTO_SETTLE` n'est pas `false`, et pour toute vente `live` en `DEMO_PAY_MODE=manual`.
+
+`DEMO_PAY_MODE` vaut `auto` (défaut) ou `manual`.
+
+- `auto` : création inchangée (facture Bitnob immédiate). `demoPayment` est `false`, `payMethod` et `payUrl` sont `null`. `POST …/pay` répond 404 `{ "error": "NOT_FOUND", "message": "Paiement simulé indisponible." }`.
+- `manual` : `POST /api/invoices` et `POST /api/public/invoices` n'appellent pas `lightning.createInvoice`. La ligne est `pending`, `bolt11` est `null`, `amountSats` suit le taux courant, `expiresAt` = création + 15 min. `simulated` et `demoPayment` sont `true`. `payMethod` est `null` tant que le client n'a pas payé. `payUrl` = `${PUBLIC_URL}/p/${slug}?facture=${id}` (chemin seul si `PUBLIC_URL` est vide).
+
+`POST /api/public/invoices/:id/pay` (manual) crée alors la facture Bitnob avec `auto_settle: true`, la `reference` déjà prévue, et une expiry égale au temps restant. Réponse 200 :
+
+```json
+{
+  "status": "pending",
+  "amountXof": 2500,
+  "expiresAt": "2026-10-17T18:15:00.000Z",
+  "demoPayment": true,
+  "payMethod": "wave"
+}
+```
+
+Un second appel ne recrée rien et renvoie le `payMethod` déjà choisi. `paid` n'est posé que par le GET Bitnob (polling, webhook ou reconciler). 400 `{ "error": "VALIDATION" }` si `method` est invalide. 409 `{ "error": "EXPIRED", "message": "Cette facture a expiré." }` si `expiresAt` est passé ou le statut est `expired`. 409 `{ "error": "ALREADY_PAID", "message": "Cette facture est déjà payée." }` si le statut est `paid`. Facture inconnue : 404.
+
+`GET /api/public/invoices/:id` :
+
+```json
+{
+  "status": "pending",
+  "amountXof": 2500,
+  "expiresAt": "2026-10-17T18:15:00.000Z",
+  "demoPayment": false,
+  "payMethod": null
+}
+```
 
 ### Ventes
 
@@ -113,7 +150,7 @@ Erreurs : `{ error: "CODE", message: "…", … }` — codes : `VALIDATION`, `PH
 
 ### Santé et jury
 
-`/api/health` : `bitnob` est un booléen (client joignable en mock, sandbox ou live) ; `mode` vaut `mock`, `sandbox` ou `live`. `/api/system` : `{ env, platformBalances, lastCalls: [{ at, method, path, status, durationMs, correlationId }], seedHistory }`. En `BITNOB_MODE=live`, `env` vient de `whoami` (cache 60 s) et retombe sur `live` si l'appel échoue. En mock, `env` reste `mock`.
+`/api/health` : `bitnob` est un booléen (client joignable en mock, sandbox ou live) ; `mode` vaut `mock`, `sandbox` ou `live` ; `demoPayMode` vaut `auto` ou `manual`. `/api/system` : `{ env, demoPayMode, platformBalances, lastCalls: [{ at, method, path, status, durationMs, correlationId }], seedHistory }`. En `BITNOB_MODE=live`, `env` vient de `whoami` (cache 60 s) et retombe sur `live` si l'appel échoue. En mock, `env` reste `mock`.
 
 ## 3. Web → stockage local
 
