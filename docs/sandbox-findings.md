@@ -1,6 +1,6 @@
 # Sandbox Bitnob — à constater
 
-Ce fichier décrit la procédure. Il ne contient **aucun résultat observé** : chaque ligne reste « à constater » tant que le laptop autorisé n'a pas lancé le script. Ne pas inventer de statut, de taux ou de nom d'événement.
+Ce fichier décrit la procédure ; les résultats constatés sont en bas.  Les lignes du tableau ci-dessous restent la liste de contrôle d'origine. Ne pas inventer de statut, de taux ou de nom d'événement.
 
 La VM d'intégration n'a pas l'IP autorisée sur la clé Bitnob. Elle ne doit pas appeler `https://api.bitnob.com`.
 
@@ -44,3 +44,23 @@ Le client valide avec zod en mode tolérant (`passthrough`, enveloppe `data` ou 
 `auto_settle` est envoyé en snake_case, comme le champ `autoSettle` du design SDK. Son refus hors sandbox est à constater.
 
 IPv4 : `NODE_OPTIONS=--dns-result-order=ipv4first` (déjà dans `.env.example`). Le client appelle aussi `dns.setDefaultResultOrder("ipv4first")`.
+
+## Constaté le 2026-10-17 (laptop autorisé, sandbox, `BITNOB_MODE=live`)
+
+| # | Vérification | Résultat constaté |
+|---|--------------|-------------------|
+| 1 | `whoami` | `environment = sandbox` |
+| 2 | Facture `auto_settle: true` puis GET `paid` | `paid` en 8 à 10 s sur 6 essais |
+| 3 | Webhook | Événement `deposit.success` (feature « Crypto » dans les logs Bitnob), signé HMAC-SHA512 avec le secret saisi à la création du webhook, valide ; reçu 8 à 12 s après le règlement. Corps : `data.{amount (sats), chain: "lightning", currency: "BTC", fee, invoice, reference, timestamp, transaction_id}`. « Send test event » envoie `webhook.test` (`{message, test: true, webhook_id}`). |
+| 4 | Taux | `/api/exchange-rates` : `data.rates[{target_currency, buy_rate, sell_rate, inverse_rate}]`, base USD, le XOF s'appelle `CFA`. `/api/trading/prices` : `data.prices[{base_currency, quote_currency, price}]`. Pas de paire BTC/XOF directe. |
+| 5 | Devis payout SN (USDT et USDC vers XOF, `source: offchain`) | Réponse sous `data.payout` : `id` (UUID), `quote_id` (`QT2_…`), `settlement_amount`, `exchange_rate.{rate, effective_rate}`, `expires_at` (environ 16 min). 10 USDT donnent 5 895 à 5 901 XOF. initialize/finalize : à constater (portefeuille à 0 $). |
+| 6 | Même `reference` de facture | Même identifiant de facture |
+| 7 | `customers.create` individual, e-mail `.invalid` | Accepté |
+
+## Piège constaté : Content-Type dupliqué
+
+Bitnob envoie ses webhooks avec l'en-tête `Content-Type: application/json, application/json`. Fastify répond alors 500 (`FST_ERR_CTP_INVALID_MEDIA_TYPE`) et Bitnob met la livraison en « Retrying ». L'API normalise cet en-tête pour `/webhooks/bitnob` (test de non-régression dans `test/webhooks.test.ts`).
+
+## Webhook : configuration constatée
+
+Le formulaire « Create a webhook » du dashboard n'a que quatre champs : Name, Endpoint URL, Signing secret (à saisir soi-même), Retry count. Aucun choix d'événements : tous les événements arrivent sur l'URL.
