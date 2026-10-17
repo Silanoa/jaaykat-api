@@ -9,6 +9,7 @@ import { AppError } from "./errors.js";
 import type { InvoicePolls } from "./modules/invoices/service.js";
 import { RateCache } from "./modules/rates/service.js";
 import { reconcilePending } from "./reconciler.js";
+import { registerAnalyticsRoutes } from "./routes/analytics.js";
 import { registerAuthRoutes } from "./routes/auth.js";
 import { registerInvoiceRoutes } from "./routes/invoices.js";
 import { registerPublicRoutes } from "./routes/public.js";
@@ -81,6 +82,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
   registerInvoiceRoutes(app, db, bitnob, config, rates, polls);
   registerPublicRoutes(app, db, bitnob, config, rates, polls);
   registerWebhookRoute(app, db, bitnob, config);
+  registerAnalyticsRoutes(app, db, config);
   if (config.reconcileIntervalMs > 0) {
     const timer = setInterval(() => {
       void reconcilePending(db, bitnob, config, polls);

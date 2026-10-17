@@ -4,6 +4,7 @@ import type { BitnobClient } from "../bitnob/types.js";
 import type { AppConfig } from "../config.js";
 import { createPublicInvoice, getPublicInvoice, getPublicShop, type InvoicePolls } from "../modules/invoices/service.js";
 import type { RateCache } from "../modules/rates/service.js";
+import { readPublicShare } from "./analytics.js";
 
 function clientIp(req: FastifyRequest): string {
   const forwarded = req.headers["cf-connecting-ip"];
@@ -63,5 +64,10 @@ export function registerPublicRoutes(
   app.get("/api/public/invoices/:id", limit, async (req) => {
     const params = req.params as { id: string };
     return getPublicInvoice(db, bitnob, config, polls, params.id);
+  });
+
+  app.get("/api/public/shares/:token", limit, async (req) => {
+    const params = req.params as { token: string };
+    return readPublicShare(db, params.token, config.now());
   });
 }
