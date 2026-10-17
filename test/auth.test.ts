@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { afterEach, describe, expect, it } from "vitest";
 import { buildApp } from "../src/app.js";
+import { BitnobError } from "../src/bitnob/errors.js";
 import { MockBitnobClient } from "../src/bitnob/mock.js";
 import type { AppConfig } from "../src/config.js";
 import { openDatabase } from "../src/db/client.js";
@@ -45,7 +46,7 @@ describe("auth marchand", () => {
     now = new Date("2026-10-17T18:00:00.000Z");
   });
 
-  async function boot(opts?: { failCustomers?: boolean }) {
+  async function boot(opts?: { failCustomers?: boolean | BitnobError }) {
     const db = openDatabase(":memory:");
     const bitnob = new MockBitnobClient({
       clientId: "mock",
@@ -121,6 +122,58 @@ describe("auth marchand", () => {
     expect(res.json().error).toBe("BITNOB_UNAVAILABLE");
     const count = db.prepare("SELECT COUNT(*) AS n FROM users").get() as { n: number };
     expect(count.n).toBe(0);
+  });
+
+  it("refuse un prénom ou un nom avec des chiffres avant d'appeler Bitnob", async () => {
+    const { app, bitnob } = await boot();
+    const lastName = await app.inject({ method: "POST", url: "/api/auth/register", payload: { ...registerBody, lastName: "E2E1" } });
+    expect(lastName.statusCode).toBe(400);
+    expect(lastName.json().error).toBe("VALIDATION");
+    expect(lastName.json().fields.lastName).toBe("Lettres, espaces, tirets et apostrophes uniquement");
+    const firstName = await app.inject({ method: "POST", url: "/api/auth/register", payload: { ...registerBody, firstName: "Awa2" } });
+    expect(firstName.statusCode).toBe(400);
+    expect(firstName.json().fields.firstName).toBe("Lettres, espaces, tirets et apostrophes uniquement");
+    expect(bitnob.customersCreated).toHaveLength(0);
+  });
+
+  it("accepte les noms composés, accentués et avec apostrophe", async () => {
+    const { app } = await boot();
+    const names: Array<[string, string, string]> = [
+      ["Jean-Pierre", "N'Diaye", "77 100 00 01"],
+      ["Aïssatou", "Ndiaye Fall", "77 100 00 02"],
+      ["Maïmouna", "D’Almeida", "77 100 00 03"],
+    ];
+    for (const [firstName, lastName, phone] of names) {
+      const res = await app.inject({ method: "POST", url: "/api/auth/register", payload: { ...registerBody, firstName, lastName, phone, shopName: "Boutique " + firstName } });
+      expect(res.statusCode).toBe(201);
+    }
+  });
+
+  it("traduit un refus de validation Bitnob en 400 lisible, sans l'appeler 502", async () => {
+    const refusal = new BitnobError("last_name must not contain digits", {
+      status: 400,
+      path: "/api/customers",
+      code: "VALIDATION_ERROR",
+      correlationId: "req_test",
+      body: { code: "VALIDATION_ERROR", extensions: { field: "last_name", rule: "name_has_digits" } },
+    });
+    const { app, db } = await boot({ failCustomers: refusal });
+    const res = await app.inject({ method: "POST", url: "/api/auth/register", payload: registerBody });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toBe("VALIDATION");
+    expect(res.json().fields.lastName).toBe("Nom refusé par le réseau de paiement");
+    expect(JSON.stringify(res.json())).not.toContain("must not contain");
+    const count = db.prepare("SELECT COUNT(*) AS n FROM users").get() as { n: number };
+    expect(count.n).toBe(0);
+  });
+
+  it("renvoie un 400 générique quand Bitnob refuse sans champ identifié", async () => {
+    const refusal = new BitnobError("refus", { status: 422, path: "/api/customers", code: "VALIDATION_ERROR", body: { code: "VALIDATION_ERROR" } });
+    const { app } = await boot({ failCustomers: refusal });
+    const res = await app.inject({ method: "POST", url: "/api/auth/register", payload: registerBody });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toBe("VALIDATION");
+    expect(res.json().message).toBe("Les informations ont été refusées. Vérifiez le nom et le numéro.");
   });
 
   it("verrouille après 5 PIN incorrects puis accepte le bon code après 15 min", async () => {

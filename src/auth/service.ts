@@ -1,5 +1,6 @@
 import { createHash, createHmac, randomBytes } from "node:crypto";
 import type { Database } from "better-sqlite3";
+import { BitnobError } from "../bitnob/errors.js";
 import type { BitnobClient } from "../bitnob/types.js";
 import type { AppConfig } from "../config.js";
 import { AppError } from "../errors.js";
@@ -114,18 +115,42 @@ export interface RegisterInput {
   pin: string;
 }
 
+const PERSON_NAME = /^[\p{L}][\p{L}\p{M}' ’-]*$/u;
+
+function personNameError(value: string | undefined): string | null {
+  const name = value?.trim() ?? "";
+  if (name.length < 1 || name.length > 40) return "1 à 40 caractères";
+  if (!PERSON_NAME.test(name)) return "Lettres, espaces, tirets et apostrophes uniquement";
+  return null;
+}
+
+const BITNOB_FIELD_MESSAGES: Record<string, { field: string; message: string }> = {
+  first_name: { field: "firstName", message: "Prénom refusé par le réseau de paiement" },
+  last_name: { field: "lastName", message: "Nom refusé par le réseau de paiement" },
+  phone_number: { field: "phone", message: "Numéro refusé par le réseau de paiement" },
+};
+
+function bitnobRefusal(error: unknown): AppError | null {
+  if (!(error instanceof BitnobError) || (error.status !== 400 && error.status !== 422)) return null;
+  const body = error.body as { extensions?: { field?: unknown } } | null;
+  const field = typeof body?.extensions?.field === "string" ? BITNOB_FIELD_MESSAGES[body.extensions.field] : undefined;
+  const correlation = error.correlationId ? { correlationId: error.correlationId } : {};
+  if (field) {
+    return new AppError(400, "VALIDATION", "Vérifiez les champs.", { fields: { [field.field]: field.message }, ...correlation });
+  }
+  return new AppError(400, "VALIDATION", "Les informations ont été refusées. Vérifiez le nom et le numéro.", { fields: {}, ...correlation });
+}
+
 export function validateRegister(input: RegisterInput): { fields: Record<string, string> } | null {
   const fields: Record<string, string> = {};
   const shop = input.shopName?.trim() ?? "";
   if (shop.length < 2 || shop.length > 40) fields.shopName = "2 à 40 caractères";
   const category = CATEGORIES.get((input.category ?? "").trim().toLowerCase());
   if (!category) fields.category = "Catégorie inconnue";
-  if ((input.firstName?.trim() ?? "").length < 1 || (input.firstName?.trim() ?? "").length > 40) {
-    fields.firstName = "1 à 40 caractères";
-  }
-  if ((input.lastName?.trim() ?? "").length < 1 || (input.lastName?.trim() ?? "").length > 40) {
-    fields.lastName = "1 à 40 caractères";
-  }
+  const firstName = personNameError(input.firstName);
+  if (firstName) fields.firstName = firstName;
+  const lastName = personNameError(input.lastName);
+  if (lastName) fields.lastName = lastName;
   if (!normalizeSnPhone(input.phone ?? "")) fields.phone = "Numéro invalide";
   const pin = pinError(input.pin ?? "");
   if (pin) fields.pin = pin;
@@ -168,6 +193,8 @@ export async function registerMerchant(
     });
     customerId = customer.id;
   } catch (error) {
+    const refusal = bitnobRefusal(error);
+    if (refusal) throw refusal;
     const correlationId = error instanceof Error && "correlationId" in error ? (error as { correlationId?: string }).correlationId : undefined;
     throw new AppError(502, "BITNOB_UNAVAILABLE", "La création a échoué, rien n'a été enregistré.", {
       ...(correlationId ? { correlationId } : {}),

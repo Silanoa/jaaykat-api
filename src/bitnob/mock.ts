@@ -27,7 +27,7 @@ interface MockQuote extends PayoutQuote {
 
 export interface MockBitnobOptions extends BitnobClientOptions {
   settleAfterMs?: number;
-  failCustomers?: boolean;
+  failCustomers?: boolean | BitnobError;
   failNextInvoices?: number;
   now?: () => number;
 }
@@ -47,7 +47,7 @@ export class MockBitnobClient implements BitnobClient {
   private readonly quotes = new Map<string, MockQuote>();
   private readonly customerRows = new Map<string, CustomerInput & { id: string }>();
   private readonly settleAfterMs: number;
-  private readonly failCustomers: boolean;
+  private readonly failCustomers: boolean | BitnobError;
   private readonly now: () => number;
 
   constructor(opts: MockBitnobOptions = { clientId: "mock", clientSecret: "mock" }) {
@@ -120,6 +120,7 @@ export class MockBitnobClient implements BitnobClient {
 
   readonly customers = {
     create: async (customer: CustomerInput): Promise<{ id: string }> => {
+      if (this.failCustomers instanceof BitnobError) throw this.failCustomers;
       if (this.failCustomers) {
         throw new BitnobError("Bitnob indisponible", {
           status: 503,
