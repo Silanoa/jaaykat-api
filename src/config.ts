@@ -3,6 +3,7 @@ import { fileURLToPath } from "node:url";
 
 export type BitnobMode = "mock" | "live";
 export type PayoutAsset = "USDT" | "USDC" | "BTC";
+export type DemoPayMode = "auto" | "manual";
 
 export interface AppConfig {
   nodeEnv: string;
@@ -18,6 +19,7 @@ export interface AppConfig {
   payerPepper: string;
   publicDir: string;
   autoSettle: boolean;
+  demoPayMode: DemoPayMode;
   payoutFromAsset: PayoutAsset;
   reconcileIntervalMs: number;
   now: () => Date;
@@ -26,6 +28,11 @@ export interface AppConfig {
 function payoutAsset(value: string | undefined): PayoutAsset {
   if (value === "USDC" || value === "BTC" || value === "USDT") return value;
   return "USDT";
+}
+
+function demoPayMode(value: string | undefined): DemoPayMode {
+  if (value === "manual") return "manual";
+  return "auto";
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
@@ -50,6 +57,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     payerPepper,
     publicDir: env.PUBLIC_DIR ?? join(here, "..", "public"),
     autoSettle: env.BITNOB_AUTO_SETTLE !== "false",
+    demoPayMode: demoPayMode(env.DEMO_PAY_MODE),
     payoutFromAsset: payoutAsset(env.BITNOB_PAYOUT_FROM_ASSET),
     reconcileIntervalMs: 30_000,
     now: () => new Date(),

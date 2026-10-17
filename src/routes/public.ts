@@ -2,7 +2,13 @@ import type { FastifyInstance, FastifyRequest } from "fastify";
 import type { Database } from "better-sqlite3";
 import type { BitnobClient } from "../bitnob/types.js";
 import type { AppConfig } from "../config.js";
-import { createPublicInvoice, getPublicInvoice, getPublicShop, type InvoicePolls } from "../modules/invoices/service.js";
+import {
+  createPublicInvoice,
+  getPublicInvoice,
+  getPublicShop,
+  payPublicInvoice,
+  type InvoicePolls,
+} from "../modules/invoices/service.js";
 import type { RateCache } from "../modules/rates/service.js";
 import { readPublicShare } from "./analytics.js";
 
@@ -64,6 +70,12 @@ export function registerPublicRoutes(
   app.get("/api/public/invoices/:id", limit, async (req) => {
     const params = req.params as { id: string };
     return getPublicInvoice(db, bitnob, config, polls, params.id);
+  });
+
+  app.post("/api/public/invoices/:id/pay", limit, async (req) => {
+    const params = req.params as { id: string };
+    const body = (req.body ?? {}) as { method?: string };
+    return payPublicInvoice(db, bitnob, config, params.id, String(body.method ?? ""));
   });
 
   app.get("/api/public/shares/:token", limit, async (req) => {

@@ -86,6 +86,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
     ok: true,
     bitnob: bitnobEnv === "mock" || bitnobEnv === "sandbox" || bitnobEnv === "live",
     mode: bitnobEnv,
+    demoPayMode: config.demoPayMode,
   }));
 
   registerAuthRoutes(app, db, bitnob, config);
