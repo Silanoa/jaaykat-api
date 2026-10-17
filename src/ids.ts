@@ -10,15 +10,15 @@ export function ulid(now = Date.now()): string {
     time = Math.floor(time / 32);
   }
   const bytes = randomBytes(10);
-  let value = 0;
+  let value = 0n;
   let bits = 0;
   let random = "";
   for (const byte of bytes) {
-    value = (value << 8) | byte;
+    value = (value << 8n) | BigInt(byte);
     bits += 8;
     while (bits >= 5) {
       bits -= 5;
-      random += CROCKFORD[(value >>> bits) & 31] ?? "0";
+      random += CROCKFORD[Number((value >> BigInt(bits)) & 31n)] ?? "0";
     }
   }
   return timeChars.join("") + random;

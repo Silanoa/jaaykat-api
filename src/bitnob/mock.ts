@@ -28,6 +28,7 @@ interface MockQuote extends PayoutQuote {
 export interface MockBitnobOptions extends BitnobClientOptions {
   settleAfterMs?: number;
   failCustomers?: boolean;
+  failNextInvoices?: number;
   now?: () => number;
 }
 
@@ -38,6 +39,9 @@ export class MockBitnobClient implements BitnobClient {
   readonly customersCreated: CustomerInput[] = [];
   readonly invoiceGets: string[] = [];
   readonly payoutGets: string[] = [];
+  readonly references: string[] = [];
+  invoiceCreates = 0;
+  private failNextInvoices: number;
   private readonly invoices = new Map<string, MockInvoice>();
   private readonly byReference = new Map<string, MockInvoice>();
   private readonly quotes = new Map<string, MockQuote>();
@@ -49,13 +53,20 @@ export class MockBitnobClient implements BitnobClient {
   constructor(opts: MockBitnobOptions = { clientId: "mock", clientSecret: "mock" }) {
     this.settleAfterMs = opts.settleAfterMs ?? 5_000;
     this.failCustomers = opts.failCustomers ?? false;
+    this.failNextInvoices = opts.failNextInvoices ?? 0;
     this.now = opts.now ?? Date.now;
   }
 
   readonly lightning = {
     createInvoice: async (input: CreateInvoiceInput): Promise<LightningInvoice> => {
+      this.references.push(input.reference);
+      if (this.failNextInvoices > 0) {
+        this.failNextInvoices -= 1;
+        throw new BitnobError("Bitnob indisponible", { status: 503, path: "/api/lightning/invoices", correlationId: "corr_inv" });
+      }
       const existing = this.byReference.get(input.reference);
       if (existing) return this.publicInvoice(existing);
+      this.invoiceCreates += 1;
       const id = `inv_${ulid()}`;
       const created = this.now();
       const expiresAt = new Date(created + (input.expirySeconds ?? 900) * 1000);
