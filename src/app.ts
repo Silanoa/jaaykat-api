@@ -73,7 +73,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
           : 60;
       return reply.code(429).send({
         error: "RATE_LIMITED",
-        message: "Trop de tentatives. RÃƒÂ©essayez dans un instant.",
+        message: "Trop de tentatives. Réessayez dans un instant.",
         retryAfterSeconds,
       });
     }

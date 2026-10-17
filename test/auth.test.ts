@@ -253,6 +253,7 @@ describe("auth marchand", () => {
       payload: { ...registerBody, pin: "12" },
     });
     expect(blocked.statusCode).toBe(429);
+    expect(blocked.json().message).toBe("Trop de tentatives. Réessayez dans un instant.");
     expect(blocked.json().error).toBe("RATE_LIMITED");
     expect(blocked.json().retryAfterSeconds).toBeGreaterThan(0);
   });
