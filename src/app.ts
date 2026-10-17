@@ -6,7 +6,17 @@ import Fastify, { type FastifyInstance } from "fastify";
 import type { BitnobClient } from "./bitnob/types.js";
 import type { AppConfig } from "./config.js";
 import { AppError } from "./errors.js";
+import type { InvoicePolls } from "./modules/invoices/service.js";
+import { RateCache } from "./modules/rates/service.js";
+import { reconcilePending } from "./reconciler.js";
 import { registerAuthRoutes } from "./routes/auth.js";
+import { registerInvoiceRoutes } from "./routes/invoices.js";
+
+declare module "fastify" {
+  interface FastifyInstance {
+    invoicePolls: InvoicePolls;
+  }
+}
 
 export interface AppDeps {
   db: Database;
@@ -21,6 +31,8 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
     logger: config.nodeEnv === "test" ? false : { level: "info" },
   });
   app.decorateRequest("auth", null);
+  const polls: InvoicePolls = { lastFetch: new Map(), lastSeen: new Map() };
+  app.decorate("invoicePolls", polls);
   await app.register(rateLimit, { global: false });
 
   app.setErrorHandler((error: unknown, request, reply) => {
@@ -48,6 +60,17 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
   app.get("/api/health", async () => ({ ok: true, bitnob: bitnobEnv }));
 
   registerAuthRoutes(app, db, bitnob, config);
+  const rates = new RateCache();
+  registerInvoiceRoutes(app, db, bitnob, config, rates, polls);
+  if (config.reconcileIntervalMs > 0) {
+    const timer = setInterval(() => {
+      void reconcilePending(db, bitnob, config, polls);
+    }, config.reconcileIntervalMs);
+    timer.unref();
+    app.addHook("onClose", async () => {
+      clearInterval(timer);
+    });
+  }
 
   if (existsSync(config.publicDir)) {
     await app.register(fastifyStatic, {
