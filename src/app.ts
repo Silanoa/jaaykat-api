@@ -12,6 +12,7 @@ import { reconcilePending } from "./reconciler.js";
 import { registerAuthRoutes } from "./routes/auth.js";
 import { registerInvoiceRoutes } from "./routes/invoices.js";
 import { registerPublicRoutes } from "./routes/public.js";
+import { registerWebhookRoute } from "./routes/webhooks.js";
 
 declare module "fastify" {
   interface FastifyInstance {
@@ -30,6 +31,21 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
   const { db, bitnob, config, bitnobEnv } = deps;
   const app = Fastify({
     logger: config.nodeEnv === "test" ? false : { level: "info" },
+  });
+  app.removeContentTypeParser("application/json");
+  app.addContentTypeParser("application/json", { parseAs: "buffer" }, (req, body, done) => {
+    const buffer = body as Buffer;
+    const path = req.url.split("?")[0] ?? "";
+    if (path === "/webhooks/bitnob") {
+      done(null, buffer);
+      return;
+    }
+    try {
+      const text = buffer.toString("utf8");
+      done(null, text.length === 0 ? {} : JSON.parse(text));
+    } catch (error) {
+      done(error as Error, undefined);
+    }
   });
   app.decorateRequest("auth", null);
   const polls: InvoicePolls = { lastFetch: new Map(), lastSeen: new Map() };
@@ -64,6 +80,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
   const rates = new RateCache();
   registerInvoiceRoutes(app, db, bitnob, config, rates, polls);
   registerPublicRoutes(app, db, bitnob, config, rates, polls);
+  registerWebhookRoute(app, db, bitnob, config);
   if (config.reconcileIntervalMs > 0) {
     const timer = setInterval(() => {
       void reconcilePending(db, bitnob, config, polls);
