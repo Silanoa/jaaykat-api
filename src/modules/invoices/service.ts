@@ -1,8 +1,10 @@
+import { createHmac } from "node:crypto";
 import type { Database } from "better-sqlite3";
 import type { BitnobClient, LightningInvoice } from "../../bitnob/types.js";
 import type { AppConfig } from "../../config.js";
 import { AppError } from "../../errors.js";
 import { ulid } from "../../ids.js";
+import { normalizeSnPhone } from "../../auth/phone.js";
 import { assertSatsInRange, pricedRate, xofToSats } from "../rates/convert.js";
 import type { RateCache } from "../rates/service.js";
 
@@ -127,9 +129,6 @@ export async function createMerchantInvoice(
   if (!idempotencyKey.trim()) {
     throw new AppError(400, "VALIDATION", "Idempotency-Key requise.");
   }
-  if (!Number.isInteger(input.amountXof) || input.amountXof <= 0) {
-    throw new AppError(400, "VALIDATION", "Montant invalide.");
-  }
   const now = config.now();
   const since = new Date(now.getTime() - IDEMPOTENCY_MS).toISOString();
   const existing = db
@@ -152,18 +151,7 @@ export async function createMerchantInvoice(
     | undefined;
   if (!merchant) throw new AppError(401, "UNAUTHENTICATED", "Connexion requise.");
 
-  const snapshot = await rates.get(db, bitnob, now.getTime());
-  const direct = snapshot.btcXof;
-  const priced = direct
-    ? { rateBtcXof: direct.sell, source: "btc_xof" as const }
-    : pricedRate(snapshot.btcUsd.sell, snapshot.usdXof.buy);
-  const sats = xofToSats(input.amountXof, priced.rateBtcXof);
-  try {
-    assertSatsInRange(sats, priced.rateBtcXof);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "Montant invalide.";
-    throw new AppError(400, "VALIDATION", message);
-  }
+  const priced = await quoteAmount(db, bitnob, rates, input.amountXof, now);
 
   const id = ulid(now.getTime());
   const reference = `jk_${merchant.slug}_${ulid(now.getTime())}`;
@@ -178,7 +166,7 @@ export async function createMerchantInvoice(
     merchantId,
     reference,
     idempotencyKey,
-    sats,
+    priced.sats,
     input.amountXof,
     priced.rateBtcXof,
     priced.source,
@@ -248,4 +236,117 @@ export async function getMerchantInvoice(
   polls.lastSeen.set(row.id, config.now().getTime());
   const refreshed = await confirmIfDue(db, bitnob, config, polls, row, "poll");
   return toInvoiceJson(refreshed, config.autoSettle);
+}
+
+async function quoteAmount(
+  db: Database,
+  bitnob: BitnobClient,
+  rates: RateCache,
+  amountXof: number,
+  now: Date,
+): Promise<{ sats: number; rateBtcXof: number; source: string }> {
+  if (!Number.isInteger(amountXof) || amountXof <= 0) {
+    throw new AppError(400, "VALIDATION", "Montant invalide.");
+  }
+  const snapshot = await rates.get(db, bitnob, now.getTime());
+  const direct = snapshot.btcXof;
+  const priced = direct
+    ? { rateBtcXof: direct.sell, source: "btc_xof" }
+    : pricedRate(snapshot.btcUsd.sell, snapshot.usdXof.buy);
+  const sats = xofToSats(amountXof, priced.rateBtcXof);
+  try {
+    assertSatsInRange(sats, priced.rateBtcXof);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Montant invalide.";
+    throw new AppError(400, "VALIDATION", message);
+  }
+  return { sats, rateBtcXof: priced.rateBtcXof, source: priced.source };
+}
+
+function rememberPayer(
+  db: Database,
+  config: AppConfig,
+  merchantId: string,
+  input: { payerName?: string; payerPhone?: string; deviceId?: string },
+  now: Date,
+): string | null {
+  const phone = input.payerPhone ? normalizeSnPhone(input.payerPhone) : null;
+  if (input.payerPhone && !phone) {
+    throw new AppError(400, "VALIDATION", "Vérifiez les champs.", { fields: { payerPhone: "Numéro invalide" } });
+  }
+  const payerRef = phone
+    ? createHmac("sha256", config.payerPepper).update(phone).digest("hex")
+    : input.deviceId
+      ? `device:${input.deviceId.slice(0, 80)}`
+      : null;
+  if (!payerRef) return null;
+  const nickname = input.payerName?.trim() || null;
+  const existing = db.prepare("SELECT id FROM payers WHERE merchant_id = ? AND payer_ref = ?").get(merchantId, payerRef) as
+    | { id: string }
+    | undefined;
+  const seen = now.toISOString();
+  if (existing) {
+    db.prepare("UPDATE payers SET last_seen_at = ?, nickname = COALESCE(?, nickname) WHERE id = ?").run(
+      seen,
+      nickname,
+      existing.id,
+    );
+    return existing.id;
+  }
+  const id = ulid(now.getTime());
+  db.prepare(
+    `INSERT INTO payers (id, merchant_id, payer_ref, nickname, first_seen_at, last_seen_at)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+  ).run(id, merchantId, payerRef, nickname, seen, seen);
+  return id;
+}
+
+export async function getPublicShop(db: Database, slug: string): Promise<{ name: string; category: string | null }> {
+  const row = db.prepare("SELECT display_name, category FROM merchants WHERE slug = ?").get(slug) as
+    | { display_name: string; category: string | null }
+    | undefined;
+  if (!row) throw new AppError(404, "NOT_FOUND", "Boutique introuvable.");
+  return { name: row.display_name, category: row.category };
+}
+
+export async function createPublicInvoice(
+  db: Database,
+  bitnob: BitnobClient,
+  rates: RateCache,
+  config: AppConfig,
+  input: { slug: string; amountXof: number; payerName?: string; payerPhone?: string; deviceId?: string },
+): Promise<InvoiceJson> {
+  const merchant = db
+    .prepare("SELECT id, slug, bitnob_customer_id FROM merchants WHERE slug = ?")
+    .get(input.slug) as { id: string; slug: string; bitnob_customer_id: string | null } | undefined;
+  if (!merchant) throw new AppError(404, "NOT_FOUND", "Boutique introuvable.");
+  const now = config.now();
+  const priced = await quoteAmount(db, bitnob, rates, input.amountXof, now);
+  const payerId = rememberPayer(db, config, merchant.id, input, now);
+  const id = ulid(now.getTime());
+  const reference = `jk_${merchant.slug}_${ulid(now.getTime())}`;
+  db.prepare(
+    `INSERT INTO invoices (
+       id, merchant_id, payer_id, reference, amount_sats, amount_xof, rate_btc_xof, rate_source,
+       description, channel, status, source, created_at
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, 'static_qr', 'creating', 'live', ?)`,
+  ).run(id, merchant.id, payerId, reference, priced.sats, input.amountXof, priced.rateBtcXof, priced.source, now.toISOString());
+  const row = loadInvoice(db, id);
+  if (!row) throw new AppError(500, "INTERNAL", "Une erreur est survenue.");
+  const refreshed = await sendToBitnob(db, bitnob, config, row, merchant.bitnob_customer_id);
+  return toInvoiceJson(refreshed, config.autoSettle);
+}
+
+export async function getPublicInvoice(
+  db: Database,
+  bitnob: BitnobClient,
+  config: AppConfig,
+  polls: InvoicePolls,
+  invoiceId: string,
+): Promise<{ status: InvoiceRow["status"]; amountXof: number; expiresAt: string | null }> {
+  const row = loadInvoice(db, invoiceId);
+  if (!row || row.source !== "live") throw new AppError(404, "NOT_FOUND", "Facture introuvable.");
+  polls.lastSeen.set(row.id, config.now().getTime());
+  const refreshed = await confirmIfDue(db, bitnob, config, polls, row, "poll");
+  return { status: refreshed.status, amountXof: refreshed.amount_xof, expiresAt: refreshed.expires_at };
 }
