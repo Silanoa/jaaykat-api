@@ -1,8 +1,8 @@
 # jaaykat-api
 
-Backend Jaaykat — Fastify + SQLite + Bitnob via un client signé local (`src/bitnob/live.ts`, voir `docs/SDK_SWAP.md` pour le package `@silanoa/bitnob-lite`, pas encore branché).
+Backend Jaaykat : Fastify, SQLite et Bitnob via un client signé local (`src/bitnob/live.ts`). L'état des paquets clients est dans `docs/SDK_SWAP.md`.
 
-Repos d’entrée soumission : ce repo + [bitnob-lite](https://github.com/Silanoa/bitnob-lite) + [jaaykat-web](https://github.com/Silanoa/jaaykat-web).
+Dépôts liés : [bitnob-lite](https://github.com/Silanoa/bitnob-lite) et [jaaykat-web](https://github.com/Silanoa/jaaykat-web).
 
 ## Docs
 

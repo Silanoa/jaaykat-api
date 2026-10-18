@@ -4,7 +4,7 @@ Version : `2026-10-17` — alignée sur le dossier projet Jaaykat v2.
 
 ## 1. Client Bitnob
 
-Le client signé de ce dépôt est `src/bitnob/live.ts` (signature HMAC sortante, `onRequest` vers le journal `api_calls`, voir ci-dessous). Le package `@silanoa/bitnob-lite` n'est pas branché : la procédure de remplacement est dans `docs/SDK_SWAP.md`.
+Le client signé de ce dépôt est `src/bitnob/live.ts` (signature HMAC sortante, `onRequest` vers le journal `api_calls`, voir ci-dessous). Aucun paquet ne le remplace. `@silanoa/bitnob-lite` n'est pas branché et `jaakat-client` n'est pas un client Bitnob : voir `docs/SDK_SWAP.md`.
 
 Reprises automatiques côté Bitnob (2 reprises, sur erreur réseau, 429 ou 5xx) : les lectures GET, et la création de facture Lightning parce qu'elle porte une `reference` (même référence, même facture, constaté en sandbox). Devis, initialisation et finalisation de retrait ne sont jamais rejoués automatiquement. Le journal `api_calls` garde les 500 derniers appels.
 
@@ -146,6 +146,14 @@ Quotas par minute et par IP : `POST /api/auth/register` et `POST /api/auth/login
 ### Score
 
 `{ score, band, eligible, demo, windowDays, thresholds: { days, sales }, remaining: { days, sales }, computedAt, progress: { daysSinceFirst, salesCount }, components: [{ key, value }], actions: [{ text, points }] }`. Le score ne compte que les ventes payées des `windowDays` (90) derniers jours. `eligible` exige `thresholds.days` (14) jours depuis la première vente payée et `thresholds.sales` (20) ventes payées ; `score` et `band` valent `null` tant que `eligible` est faux, et `remaining` dit ce qu'il manque. `demo` est vrai si une vente payée de la fenêtre vient de l'historique de démonstration. `key` : `regularity | growth | volume | loyalty | quality`. `value` entre 0 et 1. `GET /api/score` ne persiste rien : seule une attestation émise écrit une ligne dans `credit_scores`.
+
+### Retrait côté Bitnob (constaté en sandbox le 2026-10-18)
+
+- `POST /api/payouts/quotes` renvoie `data.payout` avec `id` (UUID du payout) et `quote_id` (`QT2_…`). Les chemins `/initialize` et `/finalize` prennent le `quote_id` ; avec l'UUID, Bitnob répond 404 « quote with ID … was not found ». `GET /api/payouts/:id` prend l'UUID, pas le `quote_id` (400 « invalid UUID »).
+- `POST /api/payouts/:quote_id/initialize` exige `quote_id`, `reference`, `payment_reason` (l'API envoie `vendor_payment`) et un `beneficiary` Sénégal mobile money : `destination_type: "mobile_money"`, `country: "SN"`, `account_name`, `account_number`, `network` (`orange | free | expresso | wave`) et `sender: { account_name, country }`. Sans `country`, 400 « beneficiary country is required » ; sans `destination_type`, 400 « bank is not available for XOF payouts to SN ». Réponse : `INITIATED`.
+- `POST /api/payouts/:quote_id/finalize` sans corps : `PENDING`, puis `GET` renvoie `COMPLETED` (statut brut `SUCCESS`). Le portefeuille débité est celui de `from_asset` du devis : 2 000 sats retirés pour un devis BTC de 0,00002 BTC ; un devis USDT avec 0 USDT répond 422 « Insufficient funds to complete the transaction ».
+- Une `reference` déjà utilisée sur un devis répond 409 `ALREADY_EXISTS` « payout with reference … already exists ».
+- `BITNOB_PAYOUT_FROM_ASSET` vaut `USDT` (défaut), `USDC` ou `BTC`. Avec `BTC`, le devis est chiffré en BTC (8 décimales) à partir du taux BTC/XOF de Bitnob, puis redemandé avec `ceil` si l'écart dépasse 0,5 F.
 
 ### Solde, devis, retrait
 

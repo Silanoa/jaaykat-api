@@ -1,0 +1,144 @@
+From 225fc772920efa37ed06fc21a1de2e7326ac4805 Mon Sep 17 00:00:00 2001
+From: Silanoa <rosalexahan2@gmail.com>
+Date: Sun, 18 Oct 2026 09:30:49 +0000
+Subject: [PATCH 3/4] =?UTF-8?q?Noter=20l'environnement=20Bitnob=20r=C3=A9e?=
+ =?UTF-8?q?l=20=C3=A0=20l'=C3=A9mission=20de=20l'attestation?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+---
+ src/app.ts                |  2 +-
+ src/bitnob/environment.ts | 10 ++++++++++
+ src/routes/analytics.ts   |  7 +++++--
+ test/attestation.test.ts  | 17 +++++++++++++++++
+ test/helpers.ts           |  6 +++---
+ 5 files changed, 36 insertions(+), 6 deletions(-)
+
+diff --git a/src/app.ts b/src/app.ts
+index 8f07d59..8e7fae6 100644
+--- a/src/app.ts
++++ b/src/app.ts
+@@ -94,7 +94,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
+   registerInvoiceRoutes(app, db, bitnob, config, rates, polls);
+   registerPublicRoutes(app, db, bitnob, config, rates, polls);
+   registerWebhookRoute(app, db, bitnob, config);
+-  registerAnalyticsRoutes(app, db, config, bitnobEnv);
++  registerAnalyticsRoutes(app, db, bitnob, config);
+   registerPayoutRoutes(app, db, bitnob, config, rates);
+   if (config.reconcileIntervalMs > 0) {
+     const timer = setInterval(() => {
+diff --git a/src/bitnob/environment.ts b/src/bitnob/environment.ts
+index 907a870..a42fae8 100644
+--- a/src/bitnob/environment.ts
++++ b/src/bitnob/environment.ts
+@@ -21,3 +21,13 @@ export async function resolveBitnobEnv(bitnob: BitnobClient, config: AppConfig):
+     return config.bitnobMode;
+   }
+ }
++
++export async function bitnobEnvAtIssue(bitnob: BitnobClient, config: AppConfig): Promise<string> {
++  if (config.bitnobMode !== "live") return config.bitnobMode;
++  try {
++    const who = await bitnob.whoami();
++    return who.environment.trim() || "unknown";
++  } catch {
++    return "unknown";
++  }
++}
+diff --git a/src/routes/analytics.ts b/src/routes/analytics.ts
+index 04d2f05..80ddaf0 100644
+--- a/src/routes/analytics.ts
++++ b/src/routes/analytics.ts
+@@ -2,6 +2,8 @@ import { randomBytes } from "node:crypto";
+ import type { FastifyInstance } from "fastify";
+ import type { Database } from "better-sqlite3";
+ import type { AppConfig } from "../config.js";
++import { bitnobEnvAtIssue } from "../bitnob/environment.js";
++import type { BitnobClient } from "../bitnob/types.js";
+ import { AppError } from "../errors.js";
+ import { ulid } from "../ids.js";
+ import { makeRequireAuth } from "../auth/require-auth.js";
+@@ -87,6 +89,7 @@ function scorePayload(score: ScoreResult, now: Date, demo: boolean) {
+     band: score.band,
+     eligible: score.eligible,
+     demo,
++    windowDays: WINDOW_DAYS,
+     thresholds: { days: MIN_DAYS, sales: MIN_SALES },
+     remaining: remainingToEligible(score.progress),
+     computedAt: now.toISOString(),
+@@ -150,7 +153,7 @@ function parseRange(value: unknown): DashboardRange {
+   throw new AppError(400, "VALIDATION", "Période invalide.", { fields: { range: "today, 7d ou 30d" } });
+ }
+ 
+-export function registerAnalyticsRoutes(app: FastifyInstance, db: Database, config: AppConfig, bitnobEnv: string): void {
++export function registerAnalyticsRoutes(app: FastifyInstance, db: Database, bitnob: BitnobClient, config: AppConfig): void {
+   const requireAuth = makeRequireAuth(db, config);
+ 
+   app.get("/api/dashboard", { preHandler: requireAuth }, async (req) => {
+@@ -193,7 +196,7 @@ export function registerAnalyticsRoutes(app: FastifyInstance, db: Database, conf
+       salesCount: facts.salesCount,
+       totalXof: facts.totalXof,
+       demo: facts.demo,
+-      environment: bitnobEnv,
++      environment: await bitnobEnvAtIssue(bitnob, config),
+       issuedAt: now.toISOString(),
+     };
+     const scoreId = persistScore(db, req.auth.merchantId, score, now);
+diff --git a/test/attestation.test.ts b/test/attestation.test.ts
+index 805f697..f3cf358 100644
+--- a/test/attestation.test.ts
++++ b/test/attestation.test.ts
+@@ -40,6 +40,7 @@ describe("score et attestation", () => {
+       score: null,
+       band: null,
+       demo: false,
++      windowDays: 90,
+       thresholds: { days: 14, sales: 20 },
+       remaining: { days: 14, sales: 20 },
+     });
+@@ -169,6 +170,22 @@ describe("score et attestation", () => {
+     expect(rows()).toBe(1);
+   });
+ 
++  it("note l'environnement Bitnob réel au moment de l'émission, pas le mode de l'API", async () => {
++    const { app, db, bitnob } = await bootApp(clock, undefined, { bitnobMode: "live" });
++    apps.push(app);
++    const { headers } = await registerMerchant(app);
++    sellOverDays(db, merchantIdOf(db), 25, 20);
++    const token = async () => String((await app.inject({ method: "POST", url: "/api/score/share", headers })).json().url).split("/s/")[1];
++    const read = async (value: string) => (await app.inject({ method: "GET", url: `/api/public/shares/${value}` })).json();
++
++    expect((await read(await token())).environment).toBe("sandbox");
++
++    bitnob.whoami = async () => {
++      throw new Error("injoignable");
++    };
++    expect((await read(await token())).environment).toBe("unknown");
++  });
++
+   it("révoque à la migration les liens émis avant l'identifiant et le périmètre vérifiables", () => {
+     const dir = mkdtempSync(join(tmpdir(), "jk-migrate-"));
+     const path = join(dir, "old.db");
+diff --git a/test/helpers.ts b/test/helpers.ts
+index 8110a0c..3910506 100644
+--- a/test/helpers.ts
++++ b/test/helpers.ts
+@@ -29,11 +29,11 @@ export function testConfig(clock: { now: Date }): AppConfig {
+   };
+ }
+ 
+-export async function bootApp(clock: { now: Date }, db: TestDb = openDatabase(":memory:")) {
+-  const config = testConfig(clock);
++export async function bootApp(clock: { now: Date }, db: TestDb = openDatabase(":memory:"), overrides: Partial<AppConfig> = {}) {
++  const config = { ...testConfig(clock), ...overrides };
+   const bitnob = new MockBitnobClient({ clientId: "mock", clientSecret: "mock", settleAfterMs: 0, now: () => clock.now.getTime() });
+   const app: FastifyInstance = await buildApp({ db, bitnob, config, bitnobEnv: "mock" });
+-  return { app, db, config };
++  return { app, db, config, bitnob };
+ }
+ 
+ export async function registerMerchant(app: FastifyInstance, phone = "77 123 45 67", shopName = "Chez Awa") {
+-- 
+2.47.3
+

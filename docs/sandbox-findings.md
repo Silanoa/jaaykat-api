@@ -70,3 +70,21 @@ Le formulaire « Create a webhook » du dashboard n'a que quatre champs : Name, 
 Le devis envoyait `montant / 590` USDT. Le taux effectif de Bitnob varie (589,5 à 590,6 constaté le 2026-10-17) et reste au-dessus de 590 : 2 000 F donnaient 2 001,01 puis 2 002,02 F de `settlement_amount`. Ce n'est ni un arrondi ni un problème de formatage : le marchand aurait reçu plus que le solde débité.
 
 Correction : après le premier devis, si `settlement_amount` s'écarte de 0,5 F ou plus du montant demandé, l'API redemande un devis avec `ceil(montant / exchange_rate, 6 décimales)` USDT, ce qui donne le montant demandé à moins de 0,01 F près. Bitnob refuse une `reference` déjà utilisée (409 `payout with reference ... already exists`) : le second devis porte la référence suffixée `_r`, et la ligne `payouts` garde cette référence. Le premier devis expire seul.
+
+## Retrait de bout en bout constaté le 2026-10-18
+
+Appels faits avec le client corrigé, `BITNOB_MODE=live`, sandbox :
+
+| Étape | Résultat |
+|-------|----------|
+| Soldes `GET /api/balances` | Forme `data.accounts[{currency, available_balance, available_balance_formatted}]`. BTC 0,01219539, USDC 0, USDT 0 |
+| Devis BTC 0,00002 BTC → XOF | `quote_id` `QT2_21053316`, `settlement_amount` 968,43, taux effectif 48 421 500 XOF par BTC |
+| `initialize` avec le `quote_id` | `INITIATED` (avec l'UUID : 404) |
+| `finalize` | `PENDING`, puis `GET` : `COMPLETED` en moins de 5 s (statut brut `SUCCESS`, `provider_settlement_id` `sandbox_txn_…`) |
+| Solde BTC après | 0,01217539 : 2 000 sats débités |
+| Même démarche avec un devis USDT | `finalize` : 422 « Insufficient funds to complete the transaction » (USDT à 0) |
+| Même `reference` sur un second devis | 409 `ALREADY_EXISTS` |
+
+Les soldes USDT et USDC n'ont pas été alimentés : le faucet Circle n'a pas été essayé.
+
+Anomalie non expliquée : `GET /api/balances` a renvoyé 0 pour BTC pendant environ cinq minutes (10:59 à 11:02 UTC) alors que la somme des 33 dépôts réglés vaut 1 209 446 sats et qu'aucun débit n'apparaît dans `/api/transactions`. Après un nouveau dépôt de 10 093 sats, le solde est revenu à 1 219 539 sats, soit l'ancien total plus le dépôt.
