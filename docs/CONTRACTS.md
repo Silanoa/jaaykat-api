@@ -33,7 +33,8 @@ Erreurs : `{ error: "CODE", message: "…", … }`.
 | `EXPIRED` | 409 | facture expirée (`…/pay`) |
 | `ALREADY_PAID` | 409 | facture déjà payée (`…/pay`) |
 | `QUOTE_EXPIRED` | 409 | devis de retrait expiré |
-| `INSUFFICIENT_BALANCE` | 422 | montant supérieur au solde retirable |
+| `INSUFFICIENT_BALANCE` | 422 | montant supérieur au solde retirable ; `message` indique le solde disponible et `retirableXof` le donne en nombre |
+| `NOT_ELIGIBLE` | 422 | attestation demandée avant 14 jours et 20 ventes payées ; `remaining: { days, sales }` |
 | `LOCKED` | 423 | compte verrouillé après des PIN erronés |
 | `RATE_LIMITED` | 429 | quota dépassé, avec `retryAfterSeconds` |
 | `INTERNAL` | 500 | erreur non prévue |
@@ -62,8 +63,8 @@ Quotas par minute et par IP : `POST /api/auth/register` et `POST /api/auth/login
 |---------|-------|------|
 | GET | `/api/dashboard?range=today\|7d\|30d` | Bearer |
 | GET | `/api/score` | Bearer |
-| POST | `/api/score/share` | Bearer → `{ url }` |
-| GET | `/api/balance` | Bearer → `{ balanceXof, balanceSats, lastPayouts }` |
+| POST | `/api/score/share` | Bearer → `{ url }`, 422 `NOT_ELIGIBLE` si le marchand n'est pas éligible |
+| GET | `/api/balance` | Bearer → `{ balanceXof, balanceSats, demoRevenueXof, demoSalesCount, lastPayouts }` |
 | POST | `/api/payouts/quote` | Bearer → `{ quote }` |
 | POST | `/api/payouts` | Bearer + Idempotency-Key, corps `{ quoteId }` → `{ payout }` |
 | GET | `/api/payouts/:id` | Bearer → `{ payout }` |
@@ -140,23 +141,47 @@ Quotas par minute et par IP : `POST /api/auth/register` et `POST /api/auth/login
 
 ### Tableau de bord
 
-`kpis` : `revenueXof`, `revenueDeltaPct` (ratio, `null` si la période précédente est à 0), `salesCount`, `averageBasketXof`, `conversionRate` (ratio), `medianPaySeconds`, `bestDay`, `peakLabel`. `heatmap` : `{ weekday, hour, salesCount, revenueXof }[]`, lundi = 0. `loyal` : `{ nickname, purchases, revenueXof }`. `advice` : `{ text, figures }`. `figures` est `null` : les chiffres restent dans `text` (formules du dossier).
+`demo` est vrai quand le compte porte un historique de démonstration (`source = seed`) : les chiffres incluent alors des ventes simulées. `kpis` : `revenueXof`, `revenueDeltaPct` (ratio, `null` si la période précédente est à 0), `salesCount`, `averageBasketXof`, `conversionRate` (ratio), `medianPaySeconds`, `bestDay`, `peakLabel`. `heatmap` : `{ weekday, hour, salesCount, revenueXof }[]`, lundi = 0. `loyal` : `{ nickname, purchases, revenueXof }`. `advice` : `{ text, figures }`. `figures` est `null` : les chiffres restent dans `text` (formules du dossier).
 
 ### Score
 
-`{ score, band, eligible, computedAt, progress: { daysSinceFirst, salesCount }, components: [{ key, value }], actions: [{ text, points }] }`. `score` et `band` valent `null` tant que `eligible` est faux ; `eligible` exige au moins 14 jours et 20 ventes payées. `key` : `regularity | growth | volume | loyalty | quality`. `loyalty` est la fidélité du dossier. `value` entre 0 et 1.
+`{ score, band, eligible, demo, windowDays, thresholds: { days, sales }, remaining: { days, sales }, computedAt, progress: { daysSinceFirst, salesCount }, components: [{ key, value }], actions: [{ text, points }] }`. Le score ne compte que les ventes payées des `windowDays` (90) derniers jours. `eligible` exige `thresholds.days` (14) jours depuis la première vente payée et `thresholds.sales` (20) ventes payées ; `score` et `band` valent `null` tant que `eligible` est faux, et `remaining` dit ce qu'il manque. `demo` est vrai si une vente payée de la fenêtre vient de l'historique de démonstration. `key` : `regularity | growth | volume | loyalty | quality`. `value` entre 0 et 1. `GET /api/score` ne persiste rien : seule une attestation émise écrit une ligne dans `credit_scores`.
 
 ### Solde, devis, retrait
 
-`lastPayouts` : `{ id, amountXof, network, status, createdAt }`. `quote` : `{ id, amountXof, receivedXof, exchangeRate, fees, network, accountNumberMasked, accountName, expiresAt }`. `payout` : `{ id, status, amountXof, network, reference, failureReason }`. `network` : `wave | orange | free | expresso` (`free` est la valeur Bitnob de Yas ; `POST /api/payouts/quote` accepte aussi `yas`, converti en `free`). `status` : `quoted | initiated | processing | completed | failed | expired`. `completed` seulement après un GET Bitnob.
+`balanceXof` est le solde retirable : ventes payées de source `live` moins les retraits qui ne sont ni `failed` ni `expired`. `demoRevenueXof` et `demoSalesCount` donnent le chiffre d'affaires et le nombre de ventes de l'historique de démonstration (`source = seed`) : ils ne font jamais partie de `balanceXof` et ne sont pas retirables. `lastPayouts` : `{ id, amountXof, network, status, createdAt }`. `quote` : `{ id, amountXof, receivedXof, exchangeRate, fees, network, accountNumberMasked, accountName, expiresAt }`. `payout` : `{ id, status, amountXof, network, reference, failureReason }`. `network` : `wave | orange | free | expresso` (`free` est la valeur Bitnob de Yas ; `POST /api/payouts/quote` accepte aussi `yas`, converti en `free`). `status` : `quoted | initiated | processing | completed | failed | expired`. `completed` seulement après un GET Bitnob.
 
 ### Attestation
 
-`GET /api/public/shares/:token` → `{ shopName, score, band, period, salesCount, computedAt, expiresAt, status }`. `period` est une chaîne (`"90 jours"`). `status` : `valid | expired | revoked`. Jeton inconnu : 404. Aucun montant, aucun client, aucun téléphone. La page `/s/:token` est servie par la PWA.
+`POST /api/score/share` fige une attestation : le contenu est copié dans `score_shares.snapshot` à l'émission et ne change plus. Refus 422 `NOT_ELIGIBLE` (`message` : « Attestation indisponible. Encore X ventes payées et Y jours pour être éligible. », `remaining: { days, sales }`) tant que le marchand n'est pas éligible. Le lien est valable 7 jours.
+
+`GET /api/public/shares/:token` →
+
+```json
+{
+  "attestationId": "JK-7KQ2-M9XA",
+  "shopName": "Chez Awa",
+  "status": "valid",
+  "issuedAt": "2026-10-17T18:00:00.000Z",
+  "expiresAt": "2026-10-24T18:00:00.000Z",
+  "demo": false,
+  "environment": "sandbox",
+  "windowDays": 90,
+  "score": 71,
+  "band": "B",
+  "period": { "from": "2026-09-27", "to": "2026-10-17" },
+  "salesCount": 25,
+  "totalXof": 62500
+}
+```
+
+`period` va de la date (Dakar) de la première vente payée de la fenêtre à la date d'émission. `salesCount` et `totalXof` ne comptent que les ventes payées de la fenêtre. `demo` est vrai si l'une d'elles vient de l'historique de démonstration : l'attestation est alors étiquetée « Démonstration » et n'atteste rien de réel. `environment` est l'environnement Bitnob lu par `whoami` à l'émission (`sandbox`, `live`…), `mock` en `BITNOB_MODE=mock`, `unknown` si `whoami` échoue : la page publique signale tout environnement autre que `live` ou `production`. `status` : `valid | expired | revoked`. Pour `revoked`, `score`, `band`, `period`, `salesCount` et `totalXof` valent `null`. Jeton inconnu : 404. Aucun téléphone, aucun client, aucun jeton dans la réponse. `attestationId` est tiré au hasard à l'émission (`JK-XXXX-XXXX`) ; il identifie le document imprimé, la vérification se fait par le lien ou le QR de la page `/s/:token`, servie par la PWA.
+
+Il n'existe pas encore de route pour révoquer une attestation : `revoked` se pose en base (`score_shares.revoked = 1`). La migration `user_version` 3 révoque les liens émis avant l'ajout de `snapshot`, qui n'avaient ni identifiant ni périmètre vérifiable. Aucun PDF ni image n'est généré.
 
 ### Santé et jury
 
-`/api/health` : `bitnob` est un booléen (client joignable en mock, sandbox ou live) ; `mode` vaut `mock`, `sandbox` ou `live` ; `demoPayMode` vaut `auto` ou `manual`. `/api/system` : `{ env, demoPayMode, platformBalances, lastCalls: [{ at, method, path, status, durationMs, correlationId }], seedHistory }`. En `BITNOB_MODE=live`, `env` vient de `whoami` (cache 60 s) et retombe sur `live` si l'appel échoue. En mock, `env` reste `mock`.
+`/api/health` : `bitnob` est un booléen (client joignable en mock, sandbox ou live) ; `mode` vaut `mock` ou `live` (mode de l'API, pas l'environnement Bitnob : celui-ci est dans `/api/system`) ; `demoPayMode` vaut `auto` ou `manual`. `/api/system` : `{ env, demoPayMode, platformBalances, lastCalls: [{ at, method, path, status, durationMs, correlationId }], seedHistory }`. En `BITNOB_MODE=live`, `env` vient de `whoami` (cache 60 s) et retombe sur `live` si l'appel échoue. En mock, `env` reste `mock`.
 
 ## 3. Web → stockage local
 
