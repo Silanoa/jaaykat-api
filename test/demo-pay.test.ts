@@ -267,7 +267,7 @@ describe("DEMO_PAY_MODE", () => {
     const expired = await app.inject({
       method: "POST",
       url: `/api/public/invoices/${id}/pay`,
-      payload: { method: "free" },
+      payload: { method: "yas" },
     });
     expect(expired.statusCode).toBe(409);
     expect(expired.json().error).toBe("EXPIRED");
@@ -295,6 +295,47 @@ describe("DEMO_PAY_MODE", () => {
     expect(second.statusCode).toBe(409);
     expect(second.json().error).toBe("ALREADY_PAID");
     expect(bitnob.invoiceCreates).toBe(1);
+  });
+
+  it("accepte yas et garde free comme alias vers yas", async () => {
+    const { app, db, token, idle } = await boot("manual", 0);
+    const ids: string[] = [];
+    for (const key of ["demo-yas-1", "demo-yas-2"]) {
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/invoices",
+        headers: { authorization: `Bearer ${token}`, "idempotency-key": key },
+        payload: { amountXof: 2500 },
+      });
+      ids.push(created.json().invoice.id as string);
+    }
+    const direct = await app.inject({ method: "POST", url: `/api/public/invoices/${ids[0]}/pay`, payload: { method: "yas" } });
+    expect(direct.statusCode).toBe(202);
+    expect(direct.json().payMethod).toBe("yas");
+    const alias = await app.inject({ method: "POST", url: `/api/public/invoices/${ids[1]}/pay`, payload: { method: "free" } });
+    expect(alias.statusCode).toBe(202);
+    expect(alias.json().payMethod).toBe("yas");
+    await idle();
+    const stored = db.prepare("SELECT simulated_method FROM invoices WHERE id = ?").get(ids[1]) as { simulated_method: string };
+    expect(stored.simulated_method).toBe("yas");
+    const merchant = await app.inject({ method: "GET", url: `/api/invoices/${ids[1]}`, headers: { authorization: `Bearer ${token}` } });
+    expect(merchant.json().invoice.payMethod).toBe("yas");
+  });
+
+  it("lit en yas une ancienne ligne enregistrée avec free", async () => {
+    const { app, db, token } = await boot("manual", 0);
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/invoices",
+      headers: { authorization: `Bearer ${token}`, "idempotency-key": "demo-legacy-free" },
+      payload: { amountXof: 2500 },
+    });
+    const id = created.json().invoice.id as string;
+    db.prepare("UPDATE invoices SET simulated_method = 'free', bitnob_invoice_id = 'legacy' WHERE id = ?").run(id);
+    const polled = await app.inject({ method: "GET", url: `/api/public/invoices/${id}` });
+    expect(polled.json().payMethod).toBe("yas");
+    const invalid = await app.inject({ method: "POST", url: `/api/public/invoices/${id}/pay`, payload: { method: "mixx" } });
+    expect(invalid.statusCode).toBe(400);
   });
 
   it("répond à /pay sans attendre la facture Bitnob et expose le bolt11 ensuite", async () => {

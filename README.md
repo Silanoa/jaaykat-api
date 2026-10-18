@@ -20,4 +20,4 @@ pnpm dev
 Le process sert aussi la PWA depuis `public/` (build de `jaaykat-web`).  
 Démo : `cloudflared tunnel --url http://localhost:3000` — seule cette machine appelle Bitnob (IP whitelist).
 
-`DEMO_PAY_MODE=auto` (défaut) crée la facture Bitnob tout de suite. `DEMO_PAY_MODE=manual` laisse la facture locale `pending` : le QR pointe vers `payUrl`, et `POST /api/public/invoices/:id/pay` simule le paiement (Wave, Orange, Free, Expresso) en créant alors la facture sandbox avec `auto_settle`. Le statut `paid` arrive ensuite par relecture Bitnob. En mode `manual`, `simulated` vaut `true`.
+`DEMO_PAY_MODE=auto` (défaut) crée la facture Bitnob tout de suite. `DEMO_PAY_MODE=manual` laisse la facture locale `pending` : le QR pointe vers `payUrl`, et `POST /api/public/invoices/:id/pay` simule le paiement (Wave, Orange, Yas, Expresso) en créant alors la facture sandbox avec `auto_settle`. Le statut `paid` arrive ensuite par relecture Bitnob. En mode `manual`, `simulated` vaut `true`.

@@ -10,7 +10,8 @@ import type { RateCache } from "../rates/service.js";
 
 const IDEMPOTENCY_MS = 10 * 60 * 1000;
 const INVOICE_TTL_MS = 15 * 60 * 1000;
-const PAY_METHODS = ["lightning", "wave", "orange", "free", "expresso"] as const;
+const PAY_METHODS = ["lightning", "wave", "orange", "yas", "expresso"] as const;
+const LEGACY_PAY_METHODS: Record<string, PayMethod> = { free: "yas" };
 
 export type PayMethod = (typeof PAY_METHODS)[number];
 
@@ -81,8 +82,9 @@ function isPayMethod(value: string): value is PayMethod {
 }
 
 function readPayMethod(value: string | null): PayMethod | null {
-  if (value !== null && isPayMethod(value)) return value;
-  return null;
+  if (value === null) return null;
+  const mapped = LEGACY_PAY_METHODS[value] ?? value;
+  return isPayMethod(mapped) ? mapped : null;
 }
 
 function isDemoPayment(config: AppConfig, row: InvoiceRow): boolean {
@@ -553,9 +555,11 @@ export function payPublicInvoice(
   if (config.demoPayMode !== "manual") {
     throw new AppError(404, "NOT_FOUND", "Paiement simulé indisponible.");
   }
-  if (!isPayMethod(method)) {
+  const requested = LEGACY_PAY_METHODS[method] ?? method;
+  if (!isPayMethod(requested)) {
     throw new AppError(400, "VALIDATION", "Moyen de paiement invalide.");
   }
+  method = requested;
   const row = loadInvoice(db, invoiceId);
   if (!row || row.source !== "live") throw new AppError(404, "NOT_FOUND", "Facture introuvable.");
   const now = config.now();

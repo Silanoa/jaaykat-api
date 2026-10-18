@@ -48,7 +48,7 @@ cloudflared tunnel --url http://localhost:3000
 
 # 4. Reporter l'URL aux 4 endroits
 # - PUBLIC_URL dans .env (redémarrer API)
-# - DEMO_PAY_MODE=manual si le client doit scanner le QR puis choisir Wave/Orange/Free/Expresso
+# - DEMO_PAY_MODE=manual si le client doit scanner le QR puis choisir Wave/Orange/Yas/Expresso
 #   (auto, défaut : la facture Bitnob est créée tout de suite, auto_settle)
 # - Webhook Bitnob dashboard → .../webhooks/bitnob
 # - Réinstaller PWA téléphone A depuis cette URL
