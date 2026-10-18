@@ -26,6 +26,8 @@ Démo : `cloudflared tunnel --url http://localhost:3000` — seule cette machine
 
 `pnpm seed` charge le compte « Awa Beauté » (77 123 45 67, PIN 482915) avec 60 jours de ventes payées simulées (`source = seed`). À lancer sur une base séparée (`DATABASE_PATH=/chemin/test.db pnpm seed`, puis `pnpm dev` avec la même variable) pour ne pas toucher aux données live.
 
+En mode `live`, le compte seed reçoit un identifiant client Bitnob factice : Bitnob refuse alors les factures Lightning (400). Pour encaisser une vente live avec ce compte, remplacer `merchants.bitnob_customer_id` par un client créé via `bitnob.customers.create`.
+
 - Ces ventes ne sont jamais retirables : `balanceXof` (solde retirable) les exclut, `GET /api/balance` les expose à part (`demoRevenueXof`, `demoSalesCount`), et un devis au-delà du retirable répond 422 `INSUFFICIENT_BALANCE`.
 - Le score et l'attestation de ce compte sont marqués `demo: true` : ils sont calculés sur des ventes simulées et la page publique l'écrit.
 - Un marchand sans seed est éligible à partir de 14 jours et 20 ventes payées ; avant, `POST /api/score/share` répond 422 `NOT_ELIGIBLE`.
