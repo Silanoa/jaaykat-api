@@ -2,25 +2,11 @@
 
 Version : `2026-10-17` — alignée sur le dossier projet Jaaykat v2.
 
-## 1. SDK → API
+## 1. Client Bitnob
 
-Package : `@silanoa/bitnob-lite` (scope npm à confirmer = `npm whoami`).
+Le client signé de ce dépôt est `src/bitnob/live.ts` (signature HMAC sortante, `onRequest` vers le journal `api_calls`, voir ci-dessous). Le package `@silanoa/bitnob-lite` n'est pas branché : la procédure de remplacement est dans `docs/SDK_SWAP.md`.
 
-```ts
-import { BitnobClient } from "@silanoa/bitnob-lite";
-
-const client = new BitnobClient({
-  clientId: process.env.BITNOB_CLIENT_ID!,
-  clientSecret: process.env.BITNOB_CLIENT_SECRET!,
-  onRequest: (log) => { /* journal api_calls */ },
-});
-```
-
-L’API **ne** réimplémente **pas** HMAC, retries, parse webhooks. Si une méthode manque → issue sur `bitnob-lite`, pas de fork local.
-
-Versions pendant le hackathon :
-- Avant publish : `"@silanoa/bitnob-lite": "file:../bitnob-lite"`
-- Après publish : `"@silanoa/bitnob-lite": "0.1.0"`
+Reprises automatiques côté Bitnob (2 reprises, sur erreur réseau, 429 ou 5xx) : les lectures GET, et la création de facture Lightning parce qu'elle porte une `reference` (même référence, même facture, constaté en sandbox). Devis, initialisation et finalisation de retrait ne sont jamais rejoués automatiquement. Le journal `api_calls` garde les 500 derniers appels.
 
 ## 2. API → Web (JSON)
 
@@ -35,7 +21,27 @@ Base URL : même origine en prod démo (`https://tunnel…`). Dev web : proxy Vi
 | GET | `/api/auth/me` | Bearer | `{user,merchant,session}` |
 | POST | `/api/auth/logout` | Bearer | 204 |
 
-Erreurs : `{ error: "CODE", message: "…", … }` — codes : `VALIDATION`, `PHONE_TAKEN`, `INVALID_CREDENTIALS`, `LOCKED`, `RATE_LIMITED`, `UNAUTHENTICATED`, `BITNOB_UNAVAILABLE`.
+Erreurs : `{ error: "CODE", message: "…", … }`.
+
+| Code | HTTP | Cas |
+|------|------|-----|
+| `VALIDATION` | 400 | champ invalide (`fields` possible), `Idempotency-Key` absente, moyen de paiement invalide |
+| `UNAUTHENTICATED` | 401 | jeton absent, inconnu ou expiré |
+| `INVALID_CREDENTIALS` | 401 | téléphone ou PIN incorrect, avec `attemptsLeft` |
+| `NOT_FOUND` | 404 | facture, boutique, retrait, devis ou jeton inconnu ; `POST …/pay` en `DEMO_PAY_MODE=auto` |
+| `PHONE_TAKEN` | 409 | numéro déjà inscrit |
+| `EXPIRED` | 409 | facture expirée (`…/pay`) |
+| `ALREADY_PAID` | 409 | facture déjà payée (`…/pay`) |
+| `QUOTE_EXPIRED` | 409 | devis de retrait expiré |
+| `INSUFFICIENT_BALANCE` | 422 | montant supérieur au solde retirable |
+| `LOCKED` | 423 | compte verrouillé après des PIN erronés |
+| `RATE_LIMITED` | 429 | quota dépassé, avec `retryAfterSeconds` |
+| `INTERNAL` | 500 | erreur non prévue |
+| `BITNOB_UNAVAILABLE` | 502 | Bitnob injoignable ou refus, rien n'est enregistré pour une création |
+
+Webhook `POST /webhooks/bitnob` : 401 `INVALID_SIGNATURE` (signature absente ou fausse), 200 `{ ok: true, duplicate: true }` pour un événement déjà traité, 500 `WEBHOOK_FAILED` si le traitement échoue (l'événement est alors retiré de `webhook_events` pour que Bitnob puisse le rejouer).
+
+Quotas par minute et par IP : `POST /api/auth/register` et `POST /api/auth/login` 10. Les routes publiques sont dans le tableau ci-dessous.
 
 ### Factures / ventes
 
@@ -142,7 +148,7 @@ Erreurs : `{ error: "CODE", message: "…", … }` — codes : `VALIDATION`, `PH
 
 ### Solde, devis, retrait
 
-`lastPayouts` : `{ id, amountXof, network, status, createdAt }`. `quote` : `{ id, amountXof, receivedXof, exchangeRate, fees, network, accountNumberMasked, accountName, expiresAt }`. `payout` : `{ id, status, amountXof, network, reference, failureReason }`. `network` : `wave | orange | free | expresso`. `status` : `quoted | initiated | processing | completed | failed | expired`. `completed` seulement après un GET Bitnob.
+`lastPayouts` : `{ id, amountXof, network, status, createdAt }`. `quote` : `{ id, amountXof, receivedXof, exchangeRate, fees, network, accountNumberMasked, accountName, expiresAt }`. `payout` : `{ id, status, amountXof, network, reference, failureReason }`. `network` : `wave | orange | free | expresso` (`free` est la valeur Bitnob de Yas ; `POST /api/payouts/quote` accepte aussi `yas`, converti en `free`). `status` : `quoted | initiated | processing | completed | failed | expired`. `completed` seulement après un GET Bitnob.
 
 ### Attestation
 
@@ -160,7 +166,7 @@ Erreurs : `{ error: "CODE", message: "…", … }` — codes : `VALIDATION`, `PH
 | deviceId | localStorage | UUID anonyme payeur |
 | cache dashboard/sales/score | IndexedDB (SW) | stale-while-revalidate |
 
-401 Bearer → supprimer `jk.session` → écran E04.
+401 avec jeton : efface `jk.session`, `jk.profile` et `jk.cachedAt`, puis redirige vers `/app/login` (message de session expirée).
 
 ## 4. Pages hors API JSON
 
