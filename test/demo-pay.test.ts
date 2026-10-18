@@ -485,7 +485,7 @@ describe("DEMO_PAY_MODE", () => {
     created.pragma("user_version = 1");
     created.close();
     const db = openDatabase(path);
-    expect(db.pragma("user_version", { simple: true })).toBe(2);
+    expect(db.pragma("user_version", { simple: true })).toBe(3);
     const columns = db.prepare("PRAGMA table_info(invoices)").all() as { name: string }[];
     expect(columns.map((column) => column.name)).toContain("simulated_method");
     db.close();

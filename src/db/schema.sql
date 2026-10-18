@@ -139,7 +139,8 @@ CREATE TABLE score_shares (
   merchant_id TEXT NOT NULL,
   score_id TEXT NOT NULL,
   expires_at TEXT NOT NULL,
-  revoked INTEGER NOT NULL DEFAULT 0
+  revoked INTEGER NOT NULL DEFAULT 0,
+  snapshot TEXT
 );
 
 CREATE VIEW daily_sales AS

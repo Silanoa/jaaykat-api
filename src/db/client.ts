@@ -13,13 +13,19 @@ export function openDatabase(path: string): Database.Database {
   const version = db.pragma("user_version", { simple: true }) as number;
   if (version < 1) {
     db.exec(schemaSql);
-    db.pragma("user_version = 2");
-  } else if (version < 2) {
-    const columns = db.prepare("PRAGMA table_info(invoices)").all() as { name: string }[];
-    if (!columns.some((column) => column.name === "simulated_method")) {
+  } else {
+    if (version < 2 && !hasColumn(db, "invoices", "simulated_method")) {
       db.exec("ALTER TABLE invoices ADD COLUMN simulated_method TEXT");
     }
-    db.pragma("user_version = 2");
+    if (version < 3 && hasColumn(db, "score_shares", "token_id")) {
+      if (!hasColumn(db, "score_shares", "snapshot")) db.exec("ALTER TABLE score_shares ADD COLUMN snapshot TEXT");
+      db.exec("UPDATE score_shares SET revoked = 1 WHERE snapshot IS NULL");
+    }
   }
+  if (version < 3) db.pragma("user_version = 3");
   return db;
+}
+
+function hasColumn(db: Database.Database, table: string, column: string): boolean {
+  return (db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]).some((entry) => entry.name === column);
 }

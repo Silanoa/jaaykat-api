@@ -35,6 +35,46 @@ const WEIGHTS: Record<keyof ScoreComponents, number> = {
 
 const VOLUME_CAP = 1_500_000;
 
+export const WINDOW_DAYS = 90;
+export const MIN_DAYS = 14;
+export const MIN_SALES = 20;
+
+export interface Remaining {
+  days: number;
+  sales: number;
+}
+
+export function remainingToEligible(progress: { days: number; sales: number }): Remaining {
+  return { days: Math.max(0, MIN_DAYS - progress.days), sales: Math.max(0, MIN_SALES - progress.sales) };
+}
+
+export function eligibilityMessage(remaining: Remaining): string {
+  const parts: string[] = [];
+  if (remaining.sales > 0) parts.push(`${remaining.sales} vente${remaining.sales > 1 ? "s" : ""} payée${remaining.sales > 1 ? "s" : ""}`);
+  if (remaining.days > 0) parts.push(`${remaining.days} jour${remaining.days > 1 ? "s" : ""}`);
+  return `Encore ${parts.join(" et ")} pour être éligible.`;
+}
+
+export function paidInWindow(sales: SalePoint[], now: Date): SalePoint[] {
+  const start = now.getTime() - WINDOW_DAYS * 86_400_000;
+  return sales.filter((sale) => sale.status === "paid" && Date.parse(sale.at) >= start && Date.parse(sale.at) <= now.getTime());
+}
+
+export function attestationFacts(sales: SalePoint[], now: Date) {
+  const paid = paidInWindow(sales, now);
+  const from = paid.reduce<string | null>((earliest, sale) => {
+    const key = dakarParts(new Date(sale.at)).dateKey;
+    return earliest === null || key < earliest ? key : earliest;
+  }, null);
+  return {
+    salesCount: paid.length,
+    totalXof: paid.reduce((sum, sale) => sum + sale.amountXof, 0),
+    from,
+    to: dakarParts(now).dateKey,
+    demo: paid.some((sale) => sale.source === "seed"),
+  };
+}
+
 export function scoreFromComponents(components: ScoreComponents, eligible: boolean, progress = { days: 0, sales: 0 }): ScoreResult {
   const weighted =
     WEIGHTS.regularity * components.regularity +
@@ -55,9 +95,9 @@ export function scoreFromComponents(components: ScoreComponents, eligible: boole
 }
 
 export function scoreFromSales(sales: SalePoint[], now: Date): ScoreResult {
-  const start = now.getTime() - 90 * 86_400_000;
+  const start = now.getTime() - WINDOW_DAYS * 86_400_000;
   const inWindow = sales.filter((sale) => Date.parse(sale.at) >= start && Date.parse(sale.at) <= now.getTime());
-  const paid = inWindow.filter((sale) => sale.status === "paid");
+  const paid = paidInWindow(sales, now);
   const expired = inWindow.filter((sale) => sale.status === "expired");
   const first = paid.reduce<string | null>((earliest, sale) => {
     const key = dakarParts(new Date(sale.at)).dateKey;
@@ -76,7 +116,7 @@ export function scoreFromSales(sales: SalePoint[], now: Date): ScoreResult {
   const volume = Math.min(1, Math.log10(1 + revenue30) / Math.log10(1 + VOLUME_CAP));
   const fidelity = fidelityScore(paid);
   const quality = paid.length + expired.length === 0 ? 1 : paid.length / (paid.length + expired.length);
-  const eligible = days >= 14 && paid.length >= 20;
+  const eligible = days >= MIN_DAYS && paid.length >= MIN_SALES;
   return scoreFromComponents(
     { regularity, growth, volume, fidelity, quality },
     eligible,

@@ -8,7 +8,40 @@ import { makeRequireAuth } from "../auth/require-auth.js";
 import { dashboardFromSales, type DashboardRange } from "../modules/analytics/dashboard.js";
 import type { SalePoint } from "../modules/analytics/types.js";
 import type { InvoiceRow } from "../modules/invoices/service.js";
-import { scoreFromSales, type ScoreResult } from "../modules/score/formula.js";
+import {
+  attestationFacts,
+  eligibilityMessage,
+  remainingToEligible,
+  scoreFromSales,
+  MIN_DAYS,
+  MIN_SALES,
+  WINDOW_DAYS,
+  type ScoreResult,
+} from "../modules/score/formula.js";
+
+const SHARE_VALIDITY_MS = 7 * 86_400_000;
+const ID_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+
+interface AttestationSnapshot {
+  attestationId: string;
+  shopName: string;
+  score: number;
+  band: "A" | "B" | "C" | "D";
+  windowDays: number;
+  periodFrom: string;
+  periodTo: string;
+  salesCount: number;
+  totalXof: number;
+  demo: boolean;
+  environment: string;
+  issuedAt: string;
+}
+
+function attestationId(): string {
+  const bytes = randomBytes(8);
+  const chars = Array.from(bytes, (byte) => ID_ALPHABET[byte % ID_ALPHABET.length]);
+  return `JK-${chars.slice(0, 4).join("")}-${chars.slice(4).join("")}`;
+}
 
 function loadSales(db: Database, merchantId: string): SalePoint[] {
   const rows = db
@@ -48,11 +81,14 @@ function persistScore(db: Database, merchantId: string, score: ScoreResult, now:
   return id;
 }
 
-function scorePayload(score: ScoreResult, now: Date) {
+function scorePayload(score: ScoreResult, now: Date, demo: boolean) {
   return {
     score: score.score,
     band: score.band,
     eligible: score.eligible,
+    demo,
+    thresholds: { days: MIN_DAYS, sales: MIN_SALES },
+    remaining: remainingToEligible(score.progress),
     computedAt: now.toISOString(),
     progress: {
       daysSinceFirst: score.progress.days,
@@ -69,7 +105,7 @@ function scorePayload(score: ScoreResult, now: Date) {
   };
 }
 
-function presentDashboard(result: ReturnType<typeof dashboardFromSales>) {
+function presentDashboard(result: ReturnType<typeof dashboardFromSales>, demo: boolean) {
   const heatmap = result.heatmap.flatMap((row, weekday) =>
     row.map((cell, hour) => ({
       weekday,
@@ -91,6 +127,7 @@ function presentDashboard(result: ReturnType<typeof dashboardFromSales>) {
   }
   return {
     range: result.range,
+    demo,
     kpis: {
       revenueXof: result.kpis.revenueXof,
       revenueDeltaPct: result.kpis.deltaPct,
@@ -113,34 +150,57 @@ function parseRange(value: unknown): DashboardRange {
   throw new AppError(400, "VALIDATION", "Période invalide.", { fields: { range: "today, 7d ou 30d" } });
 }
 
-export function registerAnalyticsRoutes(app: FastifyInstance, db: Database, config: AppConfig): void {
+export function registerAnalyticsRoutes(app: FastifyInstance, db: Database, config: AppConfig, bitnobEnv: string): void {
   const requireAuth = makeRequireAuth(db, config);
 
   app.get("/api/dashboard", { preHandler: requireAuth }, async (req) => {
     if (!req.auth) throw new AppError(401, "UNAUTHENTICATED", "Connexion requise.");
     const query = req.query as { range?: string };
     const range = parseRange(query.range);
-    return presentDashboard(dashboardFromSales(loadSales(db, req.auth.merchantId), range, config.now()));
+    const sales = loadSales(db, req.auth.merchantId);
+    return presentDashboard(dashboardFromSales(sales, range, config.now()), sales.some((sale) => sale.source === "seed"));
   });
 
   app.get("/api/score", { preHandler: requireAuth }, async (req) => {
     if (!req.auth) throw new AppError(401, "UNAUTHENTICATED", "Connexion requise.");
     const now = config.now();
-    const score = scoreFromSales(loadSales(db, req.auth.merchantId), now);
-    persistScore(db, req.auth.merchantId, score, now);
-    return scorePayload(score, now);
+    const sales = loadSales(db, req.auth.merchantId);
+    return scorePayload(scoreFromSales(sales, now), now, attestationFacts(sales, now).demo);
   });
 
   app.post("/api/score/share", { preHandler: requireAuth }, async (req) => {
     if (!req.auth) throw new AppError(401, "UNAUTHENTICATED", "Connexion requise.");
     const now = config.now();
-    const score = scoreFromSales(loadSales(db, req.auth.merchantId), now);
+    const sales = loadSales(db, req.auth.merchantId);
+    const score = scoreFromSales(sales, now);
+    if (!score.eligible || score.score === null || score.band === null) {
+      const remaining = remainingToEligible(score.progress);
+      throw new AppError(422, "NOT_ELIGIBLE", `Attestation indisponible. ${eligibilityMessage(remaining)}`, { remaining });
+    }
+    const facts = attestationFacts(sales, now);
+    const merchant = db.prepare("SELECT display_name AS shopName FROM merchants WHERE id = ?").get(req.auth.merchantId) as
+      | { shopName: string }
+      | undefined;
+    if (!merchant || facts.from === null) throw new AppError(401, "UNAUTHENTICATED", "Connexion requise.");
+    const snapshot: AttestationSnapshot = {
+      attestationId: attestationId(),
+      shopName: merchant.shopName,
+      score: score.score,
+      band: score.band,
+      windowDays: WINDOW_DAYS,
+      periodFrom: facts.from,
+      periodTo: facts.to,
+      salesCount: facts.salesCount,
+      totalXof: facts.totalXof,
+      demo: facts.demo,
+      environment: bitnobEnv,
+      issuedAt: now.toISOString(),
+    };
     const scoreId = persistScore(db, req.auth.merchantId, score, now);
     const token = randomBytes(32).toString("base64url");
-    const expiresAt = new Date(now.getTime() + 7 * 86_400_000).toISOString();
     db.prepare(
-      `INSERT INTO score_shares (token_id, merchant_id, score_id, expires_at, revoked) VALUES (?, ?, ?, ?, 0)`,
-    ).run(token, req.auth.merchantId, scoreId, expiresAt);
+      `INSERT INTO score_shares (token_id, merchant_id, score_id, expires_at, revoked, snapshot) VALUES (?, ?, ?, ?, 0, ?)`,
+    ).run(token, req.auth.merchantId, scoreId, new Date(now.getTime() + SHARE_VALIDITY_MS).toISOString(), JSON.stringify(snapshot));
     const path = `/s/${token}`;
     return { url: config.publicUrl ? `${config.publicUrl}${path}` : path };
   });
@@ -182,28 +242,30 @@ export function registerAnalyticsRoutes(app: FastifyInstance, db: Database, conf
 
 export function readPublicShare(db: Database, token: string, now: Date) {
   const share = db
-    .prepare(
-      `SELECT s.expires_at AS expiresAt, s.revoked AS revoked, m.display_name AS shopName,
-              c.components AS components, c.computed_at AS computedAt
-       FROM score_shares s
-       JOIN merchants m ON m.id = s.merchant_id
-       JOIN credit_scores c ON c.id = s.score_id
-       WHERE s.token_id = ?`,
-    )
-    .get(token) as
-    | { expiresAt: string; revoked: number; shopName: string; components: string; computedAt: string }
-    | undefined;
-  if (!share) throw new AppError(404, "NOT_FOUND", "Attestation introuvable.");
-  const score = JSON.parse(share.components) as ScoreResult;
+    .prepare(`SELECT expires_at AS expiresAt, revoked, snapshot FROM score_shares WHERE token_id = ?`)
+    .get(token) as { expiresAt: string; revoked: number; snapshot: string | null } | undefined;
+  if (!share || share.snapshot === null) throw new AppError(404, "NOT_FOUND", "Attestation introuvable.");
+  const snapshot = JSON.parse(share.snapshot) as AttestationSnapshot;
   const status = share.revoked ? "revoked" : share.expiresAt <= now.toISOString() ? "expired" : "valid";
-  return {
-    shopName: share.shopName,
-    score: score.score,
-    band: score.band,
-    period: `${score.windowDays} jours`,
-    salesCount: score.progress.sales,
-    computedAt: share.computedAt,
-    expiresAt: share.expiresAt,
+  const base = {
+    attestationId: snapshot.attestationId,
+    shopName: snapshot.shopName,
     status,
+    issuedAt: snapshot.issuedAt,
+    expiresAt: share.expiresAt,
+    demo: snapshot.demo,
+    environment: snapshot.environment,
+    windowDays: snapshot.windowDays,
+  };
+  if (status === "revoked") {
+    return { ...base, score: null, band: null, period: null, salesCount: null, totalXof: null };
+  }
+  return {
+    ...base,
+    score: snapshot.score,
+    band: snapshot.band,
+    period: { from: snapshot.periodFrom, to: snapshot.periodTo },
+    salesCount: snapshot.salesCount,
+    totalXof: snapshot.totalXof,
   };
 }

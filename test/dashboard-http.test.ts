@@ -14,7 +14,7 @@ describe("dashboard et score HTTP", () => {
     await Promise.all(apps.splice(0).map((app) => app.close()));
   });
 
-  it("sert le score, le tableau et une attestation sans montants", async () => {
+  it("sert le score, le tableau et une attestation sans donnée personnelle", async () => {
     const db = openDatabase(":memory:");
     const config: AppConfig = {
       nodeEnv: "test",
@@ -71,7 +71,9 @@ describe("dashboard et score HTTP", () => {
     expect(body.shopName).toBe("Awa Beauté");
     expect(body.band).toBe("B");
     expect(body.status).toBe("valid");
-    expect(body.period).toBe("90 jours");
-    expect(JSON.stringify(body)).not.toMatch(/amount|payer|phone/i);
+    expect(body.windowDays).toBe(90);
+    expect(body.demo).toBe(true);
+    expect(body.period.to).toBe("2026-10-17");
+    expect(JSON.stringify(body)).not.toMatch(/amountXof|payer|phone/i);
   });
 });
