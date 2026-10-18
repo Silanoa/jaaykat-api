@@ -56,7 +56,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
     }
   });
   app.decorateRequest("auth", null);
-  const polls: InvoicePolls = { lastFetch: new Map(), lastSeen: new Map() };
+  const polls: InvoicePolls = { lastFetch: new Map(), lastSeen: new Map(), inflight: new Map() };
   app.decorate("invoicePolls", polls);
   await app.register(rateLimit, { global: false });
 

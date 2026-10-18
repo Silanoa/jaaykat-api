@@ -42,7 +42,11 @@ export interface InvoiceRow {
 export interface InvoicePolls {
   lastFetch: Map<string, number>;
   lastSeen: Map<string, number>;
+  inflight: Map<string, Promise<void>>;
+  retryDelaysMs?: number[];
 }
+
+const DEFAULT_RETRY_DELAYS_MS = [500, 1500];
 
 export interface InvoiceJson {
   id: string;
@@ -458,8 +462,73 @@ export async function getPublicInvoice(
   const row = loadInvoice(db, invoiceId);
   if (!row || row.source !== "live") throw new AppError(404, "NOT_FOUND", "Facture introuvable.");
   polls.lastSeen.set(row.id, config.now().getTime());
-  const refreshed = await confirmIfDue(db, bitnob, config, polls, row, "poll");
-  return publicView(config, refreshed);
+  void ensureRemoteInvoice(db, bitnob, config, polls, row);
+  try {
+    const refreshed = await confirmIfDue(db, bitnob, config, polls, row, "poll");
+    return publicView(config, refreshed);
+  } catch {
+    return publicView(config, loadInvoice(db, row.id) ?? row);
+  }
+}
+
+function wait(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function createRemoteInvoice(
+  db: Database,
+  bitnob: BitnobClient,
+  config: AppConfig,
+  polls: InvoicePolls,
+  invoiceId: string,
+): Promise<void> {
+  const delays = polls.retryDelaysMs ?? DEFAULT_RETRY_DELAYS_MS;
+  for (let attempt = 0; attempt <= delays.length; attempt++) {
+    const row = loadInvoice(db, invoiceId);
+    if (!row || row.status !== "pending" || row.bitnob_invoice_id || !row.simulated_method) return;
+    const merchant = db.prepare("SELECT bitnob_customer_id FROM merchants WHERE id = ?").get(row.merchant_id) as
+      | { bitnob_customer_id: string | null }
+      | undefined;
+    const remainingMs = row.expires_at ? Date.parse(row.expires_at) - config.now().getTime() : 0;
+    if (row.expires_at && remainingMs <= 0) return;
+    try {
+      const remote = await bitnob.lightning.createInvoice({
+        amountSats: row.amount_sats,
+        description: row.description ?? row.reference,
+        reference: row.reference,
+        customerId: merchant?.bitnob_customer_id ?? undefined,
+        expirySeconds: Math.max(1, Math.ceil(remainingMs / 1000)),
+        autoSettle: true,
+      });
+      db.prepare(
+        "UPDATE invoices SET bitnob_invoice_id = ?, payment_hash = ?, bolt11 = ? WHERE id = ? AND bitnob_invoice_id IS NULL",
+      ).run(remote.id, remote.paymentHash, remote.bolt11, row.id);
+      return;
+    } catch {
+      const delay = delays[attempt];
+      if (delay === undefined) return;
+      await wait(delay);
+    }
+  }
+}
+
+export function ensureRemoteInvoice(
+  db: Database,
+  bitnob: BitnobClient,
+  config: AppConfig,
+  polls: InvoicePolls,
+  row: InvoiceRow,
+): Promise<void> | undefined {
+  if (row.source !== "live" || row.status !== "pending" || !row.simulated_method || row.bitnob_invoice_id) {
+    return undefined;
+  }
+  const running = polls.inflight.get(row.id);
+  if (running) return running;
+  const task = createRemoteInvoice(db, bitnob, config, polls, row.id).finally(() => {
+    polls.inflight.delete(row.id);
+  });
+  polls.inflight.set(row.id, task);
+  return task;
 }
 
 function assertPayable(db: Database, row: InvoiceRow, now: Date): void {
@@ -473,13 +542,14 @@ function assertPayable(db: Database, row: InvoiceRow, now: Date): void {
   }
 }
 
-export async function payPublicInvoice(
+export function payPublicInvoice(
   db: Database,
   bitnob: BitnobClient,
   config: AppConfig,
+  polls: InvoicePolls,
   invoiceId: string,
   method: string,
-): Promise<PublicInvoiceJson> {
+): PublicInvoiceJson {
   if (config.demoPayMode !== "manual") {
     throw new AppError(404, "NOT_FOUND", "Paiement simulé indisponible.");
   }
@@ -505,37 +575,8 @@ export async function payPublicInvoice(
     return publicView(config, current);
   }
 
-  const merchant = db.prepare("SELECT bitnob_customer_id FROM merchants WHERE id = ?").get(row.merchant_id) as
-    | { bitnob_customer_id: string | null }
-    | undefined;
-  const remainingMs = row.expires_at ? Date.parse(row.expires_at) - now.getTime() : 0;
-  const expirySeconds = Math.max(1, Math.ceil(remainingMs / 1000));
-  try {
-    const remote = await bitnob.lightning.createInvoice({
-      amountSats: row.amount_sats,
-      description: row.description ?? row.reference,
-      reference: row.reference,
-      customerId: merchant?.bitnob_customer_id ?? undefined,
-      expirySeconds,
-      autoSettle: true,
-    });
-    db.prepare("UPDATE invoices SET bitnob_invoice_id = ?, payment_hash = ?, bolt11 = ? WHERE id = ?").run(
-      remote.id,
-      remote.paymentHash,
-      remote.bolt11,
-      row.id,
-    );
-  } catch (error) {
-    db.prepare("UPDATE invoices SET simulated_method = NULL WHERE id = ? AND bitnob_invoice_id IS NULL").run(row.id);
-    const correlationId =
-      error instanceof Error && "correlationId" in error && typeof error.correlationId === "string"
-        ? error.correlationId
-        : undefined;
-    throw new AppError(502, "BITNOB_UNAVAILABLE", "La facture n'a pas pu être créée.", {
-      ...(correlationId ? { correlationId } : {}),
-    });
-  }
-  const updated = loadInvoice(db, row.id);
-  if (!updated) throw new AppError(500, "INTERNAL", "Une erreur est survenue.");
-  return publicView(config, updated);
+  const claimed = loadInvoice(db, row.id);
+  if (!claimed) throw new AppError(500, "INTERNAL", "Une erreur est survenue.");
+  void ensureRemoteInvoice(db, bitnob, config, polls, claimed);
+  return publicView(config, claimed);
 }

@@ -43,11 +43,11 @@ Erreurs : `{ error: "CODE", message: "…", … }` — codes : `VALIDATION`, `PH
 |---------|-------|------|-------|
 | POST | `/api/invoices` | Bearer + `Idempotency-Key` | `{amountXof, label?}` → `{ invoice }` |
 | GET | `/api/invoices/:id` | Bearer | polling 2 s → `{ invoice }` |
-| POST | `/api/public/invoices` | non, rate-limit | `{slug, amountXof, payerName?, payerPhone?, deviceId?}` → `{ invoice }` |
-| GET | `/api/public/invoices/:id` | non | plat, sans `bolt11` : `{status, amountXof, expiresAt, demoPayment, payMethod}` |
-| POST | `/api/public/invoices/:id/pay` | non, rate-limit | `DEMO_PAY_MODE=manual` seulement. Corps `{ method: "lightning"\|"wave"\|"orange"\|"free"\|"expresso" }` → plat `{status, amountXof, expiresAt, demoPayment, payMethod}` |
-| GET | `/api/public/shops/:slug` | non | `{name, category}` |
-| GET | `/api/public/shares/:token` | non, rate-limit | attestation, voir ci-dessous |
+| POST | `/api/public/invoices` | non, 10/min par IP | `{slug, amountXof, payerName?, payerPhone?, deviceId?}` → `{ invoice }` |
+| GET | `/api/public/invoices/:id` | non, 150/min par IP et facture | plat, sans `bolt11` : `{status, amountXof, expiresAt, demoPayment, payMethod}` |
+| POST | `/api/public/invoices/:id/pay` | non, 10/min par IP et facture | `DEMO_PAY_MODE=manual` seulement, réponse 202 immédiate. Corps `{ method: "lightning"\|"wave"\|"orange"\|"free"\|"expresso" }` → plat `{status, amountXof, expiresAt, demoPayment, payMethod}` |
+| GET | `/api/public/shops/:slug` | non, 60/min par IP | `{name, category}` |
+| GET | `/api/public/shares/:token` | non, 60/min par IP | attestation, voir ci-dessous |
 | GET | `/api/sales?from&to` | Bearer | `{ items }` |
 
 ### Dashboard / score / solde / payouts
@@ -102,7 +102,7 @@ Erreurs : `{ error: "CODE", message: "…", … }` — codes : `VALIDATION`, `PH
 - `auto` : création inchangée (facture Bitnob immédiate). `demoPayment` est `false`, `payMethod` et `payUrl` sont `null`. `POST …/pay` répond 404 `{ "error": "NOT_FOUND", "message": "Paiement simulé indisponible." }`.
 - `manual` : `POST /api/invoices` et `POST /api/public/invoices` n'appellent pas `lightning.createInvoice`. La ligne est `pending`, `bolt11` est `null`, `amountSats` suit le taux courant, `expiresAt` = création + 15 min. `simulated` et `demoPayment` sont `true`. `payMethod` est `null` tant que le client n'a pas payé. `payUrl` = `${PUBLIC_URL}/p/${slug}?facture=${id}` (chemin seul si `PUBLIC_URL` est vide).
 
-`POST /api/public/invoices/:id/pay` (manual) crée alors la facture Bitnob avec `auto_settle: true`, la `reference` déjà prévue, et une expiry égale au temps restant. Réponse 200 :
+`POST /api/public/invoices/:id/pay` (manual) crée alors la facture Bitnob avec `auto_settle: true`, la `reference` déjà prévue, et une expiry égale au temps restant. La réponse 202 part dès que le moyen choisi est enregistré ; la facture Bitnob est créée ensuite en arrière-plan (3 essais, reprise par le polling public ou le réconciliateur si elle n'a pas abouti, y compris après un redémarrage). Réponse 202 :
 
 ```json
 {
@@ -114,7 +114,7 @@ Erreurs : `{ error: "CODE", message: "…", … }` — codes : `VALIDATION`, `PH
 }
 ```
 
-`lightning` représente le portefeuille Lightning de l'acheteur : la réponse et `GET /api/public/invoices/:id` ajoutent alors `bolt11` (la facture Bitnob créée avec `auto_settle`), absent pour les autres moyens. En sandbox le règlement est simulé : l'API `lightning/pay` n'est pas activée, la facture se règle par `auto_settle`. Un second appel ne recrée rien et renvoie le `payMethod` déjà choisi. `paid` n'est posé que par le GET Bitnob (polling, webhook ou reconciler). 400 `{ "error": "VALIDATION" }` si `method` est invalide. 409 `{ "error": "EXPIRED", "message": "Cette facture a expiré." }` si `expiresAt` est passé ou le statut est `expired`. 409 `{ "error": "ALREADY_PAID", "message": "Cette facture est déjà payée." }` si le statut est `paid`. Facture inconnue : 404.
+`lightning` représente le portefeuille Lightning de l'acheteur : `GET /api/public/invoices/:id` ajoute alors `bolt11` dès que la facture Bitnob existe (créée avec `auto_settle`), absent pour les autres moyens. En sandbox le règlement est simulé : l'API `lightning/pay` n'est pas activée, la facture se règle par `auto_settle`. Un second appel ne recrée rien et renvoie 202 avec le `payMethod` déjà choisi. `paid` n'est posé que par le GET Bitnob (polling, webhook ou reconciler). 400 `{ "error": "VALIDATION" }` si `method` est invalide. 409 `{ "error": "EXPIRED", "message": "Cette facture a expiré." }` si `expiresAt` est passé ou le statut est `expired`. 409 `{ "error": "ALREADY_PAID", "message": "Cette facture est déjà payée." }` si le statut est `paid`. Facture inconnue : 404.
 
 `GET /api/public/invoices/:id` :
 

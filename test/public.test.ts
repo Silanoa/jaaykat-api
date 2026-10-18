@@ -86,16 +86,40 @@ describe("public et fichiers", () => {
     expect(polled.json().bolt11).toBeUndefined();
   });
 
-  it("limite les routes publiques à 10 requêtes par minute", async () => {
+  it("limite la lecture des boutiques à 60 requêtes par minute", async () => {
     const { app } = await boot();
     const headers = { "cf-connecting-ip": "203.0.113.21" };
-    for (let i = 0; i < 10; i++) {
+    for (let i = 0; i < 60; i++) {
       const res = await app.inject({ method: "GET", url: "/api/public/shops/awa-beaute", headers });
       expect(res.statusCode).toBe(200);
     }
     const blocked = await app.inject({ method: "GET", url: "/api/public/shops/awa-beaute", headers });
     expect(blocked.statusCode).toBe(429);
     expect(blocked.json().error).toBe("RATE_LIMITED");
+  });
+
+  it("limite la création de factures publiques à 10 par minute", async () => {
+    const { app } = await boot();
+    const headers = { "cf-connecting-ip": "203.0.113.22" };
+    for (let i = 0; i < 10; i++) {
+      const res = await app.inject({ method: "POST", url: "/api/public/invoices", headers, payload: { slug: "awa-beaute", amountXof: 500 } });
+      expect(res.statusCode).toBe(201);
+    }
+    const blocked = await app.inject({ method: "POST", url: "/api/public/invoices", headers, payload: { slug: "awa-beaute", amountXof: 500 } });
+    expect(blocked.statusCode).toBe(429);
+  });
+
+  it("laisse le polling d'une facture tourner à 2 s pendant plusieurs minutes sans bloquer le reste", async () => {
+    const { app } = await boot();
+    const headers = { "cf-connecting-ip": "203.0.113.23" };
+    const created = await app.inject({ method: "POST", url: "/api/public/invoices", headers, payload: { slug: "awa-beaute", amountXof: 500 } });
+    const id = created.json().invoice.id as string;
+    for (let i = 0; i < 100; i++) {
+      const res = await app.inject({ method: "GET", url: `/api/public/invoices/${id}`, headers });
+      expect(res.statusCode).toBe(200);
+    }
+    const shop = await app.inject({ method: "GET", url: "/api/public/shops/awa-beaute", headers });
+    expect(shop.statusCode).toBe(200);
   });
 
   it("sert la PWA et laisse les 404 API en JSON", async () => {

@@ -9,6 +9,7 @@ import { MockBitnobClient } from "../src/bitnob/mock.js";
 import type { CreateInvoiceInput } from "../src/bitnob/types.js";
 import { loadConfig, type AppConfig, type DemoPayMode } from "../src/config.js";
 import { openDatabase } from "../src/db/client.js";
+import { reconcilePending } from "../src/reconciler.js";
 
 const registerBody = {
   shopName: "Awa Beauté",
@@ -67,9 +68,13 @@ describe("DEMO_PAY_MODE", () => {
     const cfg = config(mode);
     const app = await buildApp({ db, bitnob, config: cfg, bitnobEnv: "mock" });
     apps.push(app);
+    app.invoicePolls.retryDelaysMs = [5, 5];
     const created = await app.inject({ method: "POST", url: "/api/auth/register", payload: registerBody });
     const token = created.json().token as string;
-    return { app, db, bitnob, creates, token };
+    const idle = async () => {
+      await Promise.all([...app.invoicePolls.inflight.values()]);
+    };
+    return { app, db, bitnob, creates, token, idle };
   }
 
   it("charge auto par défaut et manual seulement si la variable vaut manual", () => {
@@ -133,7 +138,7 @@ describe("DEMO_PAY_MODE", () => {
   });
 
   it("paie une seule fois en auto_settle et ne passe paid qu'après le GET Bitnob", async () => {
-    const { app, token, bitnob, creates } = await boot("manual", 0);
+    const { app, token, bitnob, creates, idle } = await boot("manual", 0);
     const created = await app.inject({
       method: "POST",
       url: "/api/invoices",
@@ -148,7 +153,7 @@ describe("DEMO_PAY_MODE", () => {
       url: `/api/public/invoices/${id}/pay`,
       payload: { method: "wave" },
     });
-    expect(paid.statusCode).toBe(200);
+    expect(paid.statusCode).toBe(202);
     expect(paid.json()).toEqual({
       status: "pending",
       amountXof: 2500,
@@ -156,9 +161,9 @@ describe("DEMO_PAY_MODE", () => {
       demoPayment: true,
       payMethod: "wave",
     });
+    await idle();
     expect(creates).toHaveLength(1);
     expect(creates[0]).toMatchObject({ reference, autoSettle: true, expirySeconds: 840 });
-    expect(bitnob.invoiceCreates).toBe(1);
     expect(bitnob.invoiceGets).toHaveLength(0);
 
     const again = await app.inject({
@@ -166,7 +171,7 @@ describe("DEMO_PAY_MODE", () => {
       url: `/api/public/invoices/${id}/pay`,
       payload: { method: "orange" },
     });
-    expect(again.statusCode).toBe(200);
+    expect(again.statusCode).toBe(202);
     expect(again.json().payMethod).toBe("wave");
     expect(again.json().status).toBe("pending");
     expect(bitnob.invoiceCreates).toBe(1);
@@ -183,7 +188,7 @@ describe("DEMO_PAY_MODE", () => {
   });
 
   it("accepte le portefeuille Lightning et expose la facture bolt11 seulement pour ce moyen", async () => {
-    const { app, token, creates } = await boot("manual", 0);
+    const { app, token, creates, idle } = await boot("manual", 0);
     const created = await app.inject({
       method: "POST",
       url: "/api/invoices",
@@ -195,10 +200,10 @@ describe("DEMO_PAY_MODE", () => {
     expect(before.json().bolt11).toBeUndefined();
 
     const paid = await app.inject({ method: "POST", url: `/api/public/invoices/${id}/pay`, payload: { method: "lightning" } });
-    expect(paid.statusCode).toBe(200);
+    expect(paid.statusCode).toBe(202);
     expect(paid.json().payMethod).toBe("lightning");
     expect(paid.json().status).toBe("pending");
-    expect(paid.json().bolt11).toMatch(/^ln/);
+    await idle();
     expect(creates).toHaveLength(1);
     expect(creates[0]?.autoSettle).toBe(true);
 
@@ -212,7 +217,7 @@ describe("DEMO_PAY_MODE", () => {
   });
 
   it("n'expose pas bolt11 pour un paiement Wave", async () => {
-    const { app, token } = await boot("manual", 0);
+    const { app, token, idle } = await boot("manual", 0);
     const created = await app.inject({
       method: "POST",
       url: "/api/invoices",
@@ -221,6 +226,7 @@ describe("DEMO_PAY_MODE", () => {
     });
     const id = created.json().invoice.id as string;
     const paid = await app.inject({ method: "POST", url: `/api/public/invoices/${id}/pay`, payload: { method: "wave" } });
+    await idle();
     expect(paid.json().bolt11).toBeUndefined();
     const polled = await app.inject({ method: "GET", url: `/api/public/invoices/${id}` });
     expect(polled.json().bolt11).toBeUndefined();
@@ -250,7 +256,7 @@ describe("DEMO_PAY_MODE", () => {
   });
 
   it("répond 409 si la facture est expirée ou déjà payée", async () => {
-    const { app, token, bitnob } = await boot("manual", 0);
+    const { app, bitnob, idle } = await boot("manual", 0);
     const created = await app.inject({
       method: "POST",
       url: "/api/public/invoices",
@@ -278,7 +284,8 @@ describe("DEMO_PAY_MODE", () => {
       url: `/api/public/invoices/${freshId}/pay`,
       payload: { method: "expresso" },
     });
-    expect(ok.statusCode).toBe(200);
+    expect(ok.statusCode).toBe(202);
+    await idle();
     await app.inject({ method: "GET", url: `/api/public/invoices/${freshId}` });
     const second = await app.inject({
       method: "POST",
@@ -288,6 +295,114 @@ describe("DEMO_PAY_MODE", () => {
     expect(second.statusCode).toBe(409);
     expect(second.json().error).toBe("ALREADY_PAID");
     expect(bitnob.invoiceCreates).toBe(1);
+  });
+
+  it("répond à /pay sans attendre la facture Bitnob et expose le bolt11 ensuite", async () => {
+    const { app, bitnob, token, idle } = await boot("manual", 0);
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const original = bitnob.lightning.createInvoice.bind(bitnob.lightning);
+    bitnob.lightning.createInvoice = async (input) => {
+      await gate;
+      return original(input);
+    };
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/invoices",
+      headers: { authorization: `Bearer ${token}`, "idempotency-key": "demo-slow" },
+      payload: { amountXof: 2500 },
+    });
+    const id = created.json().invoice.id as string;
+    const paid = await app.inject({ method: "POST", url: `/api/public/invoices/${id}/pay`, payload: { method: "lightning" } });
+    expect(paid.statusCode).toBe(202);
+    expect(paid.json().payMethod).toBe("lightning");
+    expect(paid.json().bolt11).toBeUndefined();
+    const waiting = await app.inject({ method: "GET", url: `/api/public/invoices/${id}` });
+    expect(waiting.statusCode).toBe(200);
+    expect(waiting.json().status).toBe("pending");
+    expect(waiting.json().bolt11).toBeUndefined();
+    release();
+    await idle();
+    const ready = await app.inject({ method: "GET", url: `/api/public/invoices/${id}` });
+    expect(ready.json().bolt11).toMatch(/^ln/);
+  });
+
+  it("réessaie en arrière-plan une création Bitnob échouée sans refaire échouer /pay", async () => {
+    const { app, bitnob, token, idle } = await boot("manual", 0);
+    const original = bitnob.lightning.createInvoice.bind(bitnob.lightning);
+    let calls = 0;
+    bitnob.lightning.createInvoice = async (input) => {
+      calls += 1;
+      if (calls === 1) throw new Error("réseau coupé");
+      return original(input);
+    };
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/invoices",
+      headers: { authorization: `Bearer ${token}`, "idempotency-key": "demo-retry" },
+      payload: { amountXof: 2500 },
+    });
+    const id = created.json().invoice.id as string;
+    const paid = await app.inject({ method: "POST", url: `/api/public/invoices/${id}/pay`, payload: { method: "wave" } });
+    expect(paid.statusCode).toBe(202);
+    await idle();
+    expect(calls).toBe(2);
+    const merchant = await app.inject({ method: "GET", url: `/api/invoices/${id}`, headers: { authorization: `Bearer ${token}` } });
+    expect(merchant.json().invoice.bolt11).toMatch(/^lntb/);
+  });
+
+  it("reprend une création Bitnob restée en suspens via le réconciliateur", async () => {
+    const { app, db, bitnob, token, idle } = await boot("manual", 0);
+    const original = bitnob.lightning.createInvoice.bind(bitnob.lightning);
+    let down = true;
+    bitnob.lightning.createInvoice = async (input) => {
+      if (down) throw new Error("indisponible");
+      return original(input);
+    };
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/invoices",
+      headers: { authorization: `Bearer ${token}`, "idempotency-key": "demo-resume" },
+      payload: { amountXof: 2500 },
+    });
+    const id = created.json().invoice.id as string;
+    const paid = await app.inject({ method: "POST", url: `/api/public/invoices/${id}/pay`, payload: { method: "wave" } });
+    expect(paid.statusCode).toBe(202);
+    await idle();
+    const stuck = db.prepare("SELECT simulated_method, bitnob_invoice_id FROM invoices WHERE id = ?").get(id) as {
+      simulated_method: string | null;
+      bitnob_invoice_id: string | null;
+    };
+    expect(stuck).toEqual({ simulated_method: "wave", bitnob_invoice_id: null });
+    down = false;
+    now = new Date("2026-10-17T18:01:00.000Z");
+    await reconcilePending(db, bitnob, config("manual"), app.invoicePolls);
+    await idle();
+    const resumed = db.prepare("SELECT bitnob_invoice_id FROM invoices WHERE id = ?").get(id) as { bitnob_invoice_id: string | null };
+    expect(resumed.bitnob_invoice_id).not.toBeNull();
+    expect(bitnob.invoiceCreates).toBe(1);
+  });
+
+  it("ne renvoie pas d'erreur au polling public si la relecture Bitnob échoue", async () => {
+    const { app, bitnob, token, idle } = await boot("manual", 0);
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/invoices",
+      headers: { authorization: `Bearer ${token}`, "idempotency-key": "demo-get-fails" },
+      payload: { amountXof: 2500 },
+    });
+    const id = created.json().invoice.id as string;
+    await app.inject({ method: "POST", url: `/api/public/invoices/${id}/pay`, payload: { method: "wave" } });
+    await idle();
+    bitnob.lightning.getInvoice = async () => {
+      throw new Error("relecture indisponible");
+    };
+    now = new Date("2026-10-17T18:01:00.000Z");
+    const polled = await app.inject({ method: "GET", url: `/api/public/invoices/${id}` });
+    expect(polled.statusCode).toBe(200);
+    expect(polled.json().status).toBe("pending");
   });
 
   it("publie demoPayMode sur health et system", async () => {

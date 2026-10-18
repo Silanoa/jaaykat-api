@@ -18,13 +18,17 @@ function clientIp(req: FastifyRequest): string {
   return req.ip;
 }
 
-function publicRateLimit() {
+function invoiceId(req: FastifyRequest): string {
+  return String((req.params as { id?: string }).id ?? "");
+}
+
+function publicRateLimit(max: number, key: (req: FastifyRequest) => string) {
   return {
     config: {
       rateLimit: {
-        max: 10,
+        max,
         timeWindow: "1 minute",
-        keyGenerator: (req: FastifyRequest) => `public:${clientIp(req)}`,
+        keyGenerator: key,
         errorResponseBuilder: (_req: FastifyRequest, context: { ttl: number }) =>
           Object.assign(new Error("Trop de tentatives. Réessayez dans un instant."), {
             statusCode: 429,
@@ -43,13 +47,16 @@ export function registerPublicRoutes(
   rates: RateCache,
   polls: InvoicePolls,
 ): void {
-  const limit = publicRateLimit();
-  app.get("/api/public/shops/:slug", limit, async (req) => {
+  const read = publicRateLimit(60, (req) => `read:${clientIp(req)}`);
+  const create = publicRateLimit(10, (req) => `create:${clientIp(req)}`);
+  const poll = publicRateLimit(150, (req) => `poll:${clientIp(req)}:${invoiceId(req)}`);
+  const pay = publicRateLimit(10, (req) => `pay:${clientIp(req)}:${invoiceId(req)}`);
+  app.get("/api/public/shops/:slug", read, async (req) => {
     const params = req.params as { slug: string };
     return getPublicShop(db, params.slug);
   });
 
-  app.post("/api/public/invoices", limit, async (req, reply) => {
+  app.post("/api/public/invoices", create, async (req, reply) => {
     const body = (req.body ?? {}) as {
       slug?: string;
       amountXof?: number;
@@ -67,18 +74,19 @@ export function registerPublicRoutes(
     return reply.code(201).send({ invoice });
   });
 
-  app.get("/api/public/invoices/:id", limit, async (req) => {
+  app.get("/api/public/invoices/:id", poll, async (req) => {
     const params = req.params as { id: string };
     return getPublicInvoice(db, bitnob, config, polls, params.id);
   });
 
-  app.post("/api/public/invoices/:id/pay", limit, async (req) => {
+  app.post("/api/public/invoices/:id/pay", pay, async (req, reply) => {
     const params = req.params as { id: string };
     const body = (req.body ?? {}) as { method?: string };
-    return payPublicInvoice(db, bitnob, config, params.id, String(body.method ?? ""));
+    const view = payPublicInvoice(db, bitnob, config, polls, params.id, String(body.method ?? ""));
+    return reply.code(202).send(view);
   });
 
-  app.get("/api/public/shares/:token", limit, async (req) => {
+  app.get("/api/public/shares/:token", read, async (req) => {
     const params = req.params as { token: string };
     return readPublicShare(db, params.token, config.now());
   });
