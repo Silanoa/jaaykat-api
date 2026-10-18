@@ -1,6 +1,5 @@
 # jaaykat-api Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans. REQUIRED: superpowers:test-driven-development for métier (auth, invoices, score, webhooks).
 
 **Goal:** API Fastify + SQLite qui encaisses Lightning via bitnob-lite, sert la PWA, prêt démo tunnel.
 
