@@ -161,7 +161,7 @@ describe("auth marchand", () => {
     const res = await app.inject({ method: "POST", url: "/api/auth/register", payload: registerBody });
     expect(res.statusCode).toBe(400);
     expect(res.json().error).toBe("VALIDATION");
-    expect(res.json().fields.lastName).toBe("Nom refusé par le réseau de paiement");
+    expect(res.json().fields.lastName).toBe("Nom non accepté");
     expect(JSON.stringify(res.json())).not.toContain("must not contain");
     const count = db.prepare("SELECT COUNT(*) AS n FROM users").get() as { n: number };
     expect(count.n).toBe(0);
@@ -173,7 +173,7 @@ describe("auth marchand", () => {
     const res = await app.inject({ method: "POST", url: "/api/auth/register", payload: registerBody });
     expect(res.statusCode).toBe(400);
     expect(res.json().error).toBe("VALIDATION");
-    expect(res.json().message).toBe("Les informations ont été refusées. Vérifiez le nom et le numéro.");
+    expect(res.json().message).toBe("Informations refusées. Vérifiez le nom et le numéro.");
   });
 
   it("verrouille après 5 PIN incorrects puis accepte le bon code après 15 min", async () => {

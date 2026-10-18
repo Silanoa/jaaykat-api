@@ -125,9 +125,9 @@ function personNameError(value: string | undefined): string | null {
 }
 
 const BITNOB_FIELD_MESSAGES: Record<string, { field: string; message: string }> = {
-  first_name: { field: "firstName", message: "Prénom refusé par le réseau de paiement" },
-  last_name: { field: "lastName", message: "Nom refusé par le réseau de paiement" },
-  phone_number: { field: "phone", message: "Numéro refusé par le réseau de paiement" },
+  first_name: { field: "firstName", message: "Prénom non accepté" },
+  last_name: { field: "lastName", message: "Nom non accepté" },
+  phone_number: { field: "phone", message: "Numéro non accepté" },
 };
 
 function bitnobRefusal(error: unknown): AppError | null {
@@ -138,7 +138,7 @@ function bitnobRefusal(error: unknown): AppError | null {
   if (field) {
     return new AppError(400, "VALIDATION", "Vérifiez les champs.", { fields: { [field.field]: field.message }, ...correlation });
   }
-  return new AppError(400, "VALIDATION", "Les informations ont été refusées. Vérifiez le nom et le numéro.", { fields: {}, ...correlation });
+  return new AppError(400, "VALIDATION", "Informations refusées. Vérifiez le nom et le numéro.", { fields: {}, ...correlation });
 }
 
 export function validateRegister(input: RegisterInput): { fields: Record<string, string> } | null {
