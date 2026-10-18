@@ -29,11 +29,11 @@ export function testConfig(clock: { now: Date }): AppConfig {
   };
 }
 
-export async function bootApp(clock: { now: Date }, db: TestDb = openDatabase(":memory:")) {
-  const config = testConfig(clock);
+export async function bootApp(clock: { now: Date }, db: TestDb = openDatabase(":memory:"), overrides: Partial<AppConfig> = {}) {
+  const config = { ...testConfig(clock), ...overrides };
   const bitnob = new MockBitnobClient({ clientId: "mock", clientSecret: "mock", settleAfterMs: 0, now: () => clock.now.getTime() });
   const app: FastifyInstance = await buildApp({ db, bitnob, config, bitnobEnv: "mock" });
-  return { app, db, config };
+  return { app, db, config, bitnob };
 }
 
 export async function registerMerchant(app: FastifyInstance, phone = "77 123 45 67", shopName = "Chez Awa") {

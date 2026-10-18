@@ -21,3 +21,13 @@ export async function resolveBitnobEnv(bitnob: BitnobClient, config: AppConfig):
     return config.bitnobMode;
   }
 }
+
+export async function bitnobEnvAtIssue(bitnob: BitnobClient, config: AppConfig): Promise<string> {
+  if (config.bitnobMode !== "live") return config.bitnobMode;
+  try {
+    const who = await bitnob.whoami();
+    return who.environment.trim() || "unknown";
+  } catch {
+    return "unknown";
+  }
+}

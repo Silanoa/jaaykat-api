@@ -2,6 +2,8 @@ import { randomBytes } from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import type { Database } from "better-sqlite3";
 import type { AppConfig } from "../config.js";
+import { bitnobEnvAtIssue } from "../bitnob/environment.js";
+import type { BitnobClient } from "../bitnob/types.js";
 import { AppError } from "../errors.js";
 import { ulid } from "../ids.js";
 import { makeRequireAuth } from "../auth/require-auth.js";
@@ -87,6 +89,7 @@ function scorePayload(score: ScoreResult, now: Date, demo: boolean) {
     band: score.band,
     eligible: score.eligible,
     demo,
+    windowDays: WINDOW_DAYS,
     thresholds: { days: MIN_DAYS, sales: MIN_SALES },
     remaining: remainingToEligible(score.progress),
     computedAt: now.toISOString(),
@@ -150,7 +153,7 @@ function parseRange(value: unknown): DashboardRange {
   throw new AppError(400, "VALIDATION", "Période invalide.", { fields: { range: "today, 7d ou 30d" } });
 }
 
-export function registerAnalyticsRoutes(app: FastifyInstance, db: Database, config: AppConfig, bitnobEnv: string): void {
+export function registerAnalyticsRoutes(app: FastifyInstance, db: Database, bitnob: BitnobClient, config: AppConfig): void {
   const requireAuth = makeRequireAuth(db, config);
 
   app.get("/api/dashboard", { preHandler: requireAuth }, async (req) => {
@@ -193,7 +196,7 @@ export function registerAnalyticsRoutes(app: FastifyInstance, db: Database, conf
       salesCount: facts.salesCount,
       totalXof: facts.totalXof,
       demo: facts.demo,
-      environment: bitnobEnv,
+      environment: await bitnobEnvAtIssue(bitnob, config),
       issuedAt: now.toISOString(),
     };
     const scoreId = persistScore(db, req.auth.merchantId, score, now);

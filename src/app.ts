@@ -94,7 +94,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
   registerInvoiceRoutes(app, db, bitnob, config, rates, polls);
   registerPublicRoutes(app, db, bitnob, config, rates, polls);
   registerWebhookRoute(app, db, bitnob, config);
-  registerAnalyticsRoutes(app, db, config, bitnobEnv);
+  registerAnalyticsRoutes(app, db, bitnob, config);
   registerPayoutRoutes(app, db, bitnob, config, rates);
   if (config.reconcileIntervalMs > 0) {
     const timer = setInterval(() => {

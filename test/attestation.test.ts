@@ -40,6 +40,7 @@ describe("score et attestation", () => {
       score: null,
       band: null,
       demo: false,
+      windowDays: 90,
       thresholds: { days: 14, sales: 20 },
       remaining: { days: 14, sales: 20 },
     });
@@ -167,6 +168,22 @@ describe("score et attestation", () => {
     expect(rows()).toBe(0);
     await app.inject({ method: "POST", url: "/api/score/share", headers });
     expect(rows()).toBe(1);
+  });
+
+  it("note l'environnement Bitnob réel au moment de l'émission, pas le mode de l'API", async () => {
+    const { app, db, bitnob } = await bootApp(clock, undefined, { bitnobMode: "live" });
+    apps.push(app);
+    const { headers } = await registerMerchant(app);
+    sellOverDays(db, merchantIdOf(db), 25, 20);
+    const token = async () => String((await app.inject({ method: "POST", url: "/api/score/share", headers })).json().url).split("/s/")[1];
+    const read = async (value: string) => (await app.inject({ method: "GET", url: `/api/public/shares/${value}` })).json();
+
+    expect((await read(await token())).environment).toBe("sandbox");
+
+    bitnob.whoami = async () => {
+      throw new Error("injoignable");
+    };
+    expect((await read(await token())).environment).toBe("unknown");
   });
 
   it("révoque à la migration les liens émis avant l'identifiant et le périmètre vérifiables", () => {
