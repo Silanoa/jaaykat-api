@@ -187,14 +187,15 @@ export class MockBitnobClient implements BitnobClient {
       this.quoteRequests.push(input);
       const id = `qt_${ulid()}`;
       const fromAmount = Number(input.amount);
-      const settlement = input.toCurrency === "XOF" ? (fromAmount * this.payoutRate).toFixed(2) : input.amount;
+      const unitRate = input.fromAsset === "BTC" ? this.payoutRate * MOCK_BTC_USD.mid : this.payoutRate;
+      const settlement = input.toCurrency === "XOF" ? (fromAmount * unitRate).toFixed(2) : input.amount;
       const quote: MockQuote = {
         id,
         fromAsset: input.fromAsset,
         fromAmount: input.amount,
         toCurrency: input.toCurrency,
         settlementAmount: settlement,
-        exchangeRate: String(this.payoutRate),
+        exchangeRate: String(unitRate),
         fees: "0",
         expiresAt: new Date(this.now() + 16 * 60 * 1000),
         reference: input.reference,

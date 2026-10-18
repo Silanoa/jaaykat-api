@@ -24,7 +24,7 @@ describe("retraits et ledger", () => {
     await Promise.all(apps.splice(0).map((app) => app.close()));
   });
 
-  function config(): AppConfig {
+  function config(payoutFromAsset: AppConfig["payoutFromAsset"] = "USDT"): AppConfig {
     return {
       nodeEnv: "test",
       port: 0,
@@ -40,13 +40,13 @@ describe("retraits et ledger", () => {
       publicDir: "/tmp/jaaykat-no-public",
       autoSettle: true,
       demoPayMode: "auto",
-      payoutFromAsset: "USDT",
+      payoutFromAsset,
       reconcileIntervalMs: 0,
       now: () => now,
     };
   }
 
-  async function boot(opts?: { payoutRate?: number }) {
+  async function boot(opts?: { payoutRate?: number; payoutFromAsset?: AppConfig["payoutFromAsset"] }) {
     const db = openDatabase(":memory:");
     const bitnob = new MockBitnobClient({
       clientId: "mock",
@@ -55,7 +55,7 @@ describe("retraits et ledger", () => {
       payoutRate: opts?.payoutRate,
       now: () => now.getTime(),
     });
-    const cfg = config();
+    const cfg = config(opts?.payoutFromAsset);
     const app = await buildApp({ db, bitnob, config: cfg, bitnobEnv: "mock" });
     apps.push(app);
     const created = await app.inject({ method: "POST", url: "/api/auth/register", payload: registerBody });
@@ -112,6 +112,26 @@ describe("retraits et ledger", () => {
     });
     expect(quote.statusCode).toBe(422);
     expect(quote.json().error).toBe("INSUFFICIENT_BALANCE");
+  });
+
+  it("chiffre le devis en BTC quand le retrait est débité du portefeuille BTC", async () => {
+    const { app, db, bitnob, token, merchantId } = await boot({ payoutFromAsset: "BTC" });
+    credit(db, merchantId, 10_000, "live");
+    const quote = await app.inject({
+      method: "POST",
+      url: "/api/payouts/quote",
+      headers: { authorization: `Bearer ${token}` },
+      payload: { amountXof: 5000, network: "wave", accountNumber: "771234567", accountName: "Awa Diop" },
+    });
+    expect(quote.statusCode).toBe(200);
+    expect(quote.json().quote.receivedXof).toBe(5000);
+    const requested = bitnob.quoteRequests.map((request) => ({ asset: request.fromAsset, amount: Number(request.amount) }));
+    expect(requested.every((request) => request.asset === "BTC")).toBe(true);
+    expect(requested[0]?.amount).toBeLessThan(0.001);
+    expect(requested[0]?.amount).toBeGreaterThan(0.00001);
+    const last = requested.at(-1);
+    expect(String(bitnob.quoteRequests.at(-1)?.amount).split(".")[1]?.length ?? 0).toBeLessThanOrEqual(8);
+    expect((last?.amount ?? 0) * 590 * 65_000).toBeGreaterThanOrEqual(5000);
   });
 
   it("envoie à Bitnob un bénéficiaire mobile money complet avec pays et expéditeur", async () => {

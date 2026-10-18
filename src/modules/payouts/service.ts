@@ -136,10 +136,12 @@ export async function quotePayout(
       toCurrency: "XOF",
       source: "offchain" as const,
     };
+    const decimals = config.payoutFromAsset === "BTC" ? 8 : 6;
+    const unitXof = config.payoutFromAsset === "BTC" ? await btcXofRate(bitnob) : XOF_PER_STABLE;
     let quotedReference = reference;
     let remote = await bitnob.payouts.quote({
       ...quoteInput,
-      amount: (input.amountXof / XOF_PER_STABLE).toFixed(6),
+      amount: (input.amountXof / unitXof).toFixed(decimals),
       reference,
     });
     const rate = Number(remote.exchangeRate);
@@ -148,7 +150,7 @@ export async function quotePayout(
       quotedReference = `${reference}_r`;
       remote = await bitnob.payouts.quote({
         ...quoteInput,
-        amount: (Math.ceil((input.amountXof / rate) * 1e6) / 1e6).toFixed(6),
+        amount: (Math.ceil((input.amountXof / rate) * 10 ** decimals) / 10 ** decimals).toFixed(decimals),
         reference: quotedReference,
       });
     }
@@ -241,6 +243,11 @@ export async function getPayout(
   const refreshed = loadPayout(db, row.id);
   if (!refreshed) throw new AppError(500, "INTERNAL", "Une erreur est survenue.");
   return presentPayout(refreshed);
+}
+
+async function btcXofRate(bitnob: BitnobClient): Promise<number> {
+  const snapshot = await bitnob.rates.get();
+  return snapshot.btcXof?.mid ?? snapshot.btcUsd.mid * snapshot.usdXof.mid;
 }
 
 function presentQuote(row: PayoutRow, settlement: number) {
