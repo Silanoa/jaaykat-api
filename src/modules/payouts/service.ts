@@ -1,4 +1,5 @@
 import type { Database } from "better-sqlite3";
+import { quoteForSettlement } from "bitnob-lite";
 import { maskPhone } from "../../auth/phone.js";
 import type { BitnobClient, PayoutStatus, SnNetwork } from "../../bitnob/types.js";
 import type { AppConfig } from "../../config.js";
@@ -130,30 +131,18 @@ export async function quotePayout(
   pendingAccounts.set(id, account);
 
   try {
-    const quoteInput = {
+    const decimals = config.payoutFromAsset === "BTC" ? 8 : 6;
+    const unitXof = config.payoutFromAsset === "BTC" ? await btcXofRate(bitnob) : XOF_PER_STABLE;
+    const { quote: remote, reference: quotedReference } = await quoteForSettlement(bitnob.payouts, {
       country: "SN",
       fromAsset: config.payoutFromAsset,
       toCurrency: "XOF",
-      source: "offchain" as const,
-    };
-    const decimals = config.payoutFromAsset === "BTC" ? 8 : 6;
-    const unitXof = config.payoutFromAsset === "BTC" ? await btcXofRate(bitnob) : XOF_PER_STABLE;
-    let quotedReference = reference;
-    let remote = await bitnob.payouts.quote({
-      ...quoteInput,
-      amount: (input.amountXof / unitXof).toFixed(decimals),
+      source: "offchain",
+      settleAmount: input.amountXof,
+      unitPerAsset: unitXof,
+      decimals,
       reference,
     });
-    const rate = Number(remote.exchangeRate);
-    const settled = Number(remote.settlementAmount);
-    if (rate > 0 && settled > 0 && Math.abs(settled - input.amountXof) >= 0.5) {
-      quotedReference = `${reference}_r`;
-      remote = await bitnob.payouts.quote({
-        ...quoteInput,
-        amount: (Math.ceil((input.amountXof / rate) * 10 ** decimals) / 10 ** decimals).toFixed(decimals),
-        reference: quotedReference,
-      });
-    }
     db.prepare(
       `UPDATE payouts
        SET reference = ?, bitnob_quote_id = ?, from_amount = ?, exchange_rate = ?, fees = ?, quote_expires_at = ?, updated_at = ?
