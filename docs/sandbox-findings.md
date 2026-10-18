@@ -87,4 +87,4 @@ Appels faits avec le client corrigé, `BITNOB_MODE=live`, sandbox :
 
 Les soldes USDT et USDC n'ont pas été alimentés : le faucet Circle n'a pas été essayé.
 
-Anomalie non expliquée : `GET /api/balances` a renvoyé 0 pour BTC pendant environ cinq minutes (10:59 à 11:02 UTC) alors que la somme des 33 dépôts réglés vaut 1 209 446 sats et qu'aucun débit n'apparaît dans `/api/transactions`. Après un nouveau dépôt de 10 093 sats, le solde est revenu à 1 219 539 sats, soit l'ancien total plus le dépôt.
+Anomalie non expliquée : `GET /api/balances` a renvoyé 0 pour BTC lors de plusieurs lectures consécutives (10:59 à 11:01 UTC) alors que la somme des 33 dépôts réglés vaut 1 209 446 sats et qu'aucun débit n'apparaît dans `/api/transactions`. Après un nouveau dépôt de 10 093 sats, le solde est revenu à 1 219 539 sats, soit l'ancien total plus le dépôt.
