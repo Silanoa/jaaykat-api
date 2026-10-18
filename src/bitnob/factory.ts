@@ -1,9 +1,9 @@
 import type { AppConfig } from "../config.js";
 import { LiveBitnobClient } from "./live.js";
 import { MockBitnobClient } from "./mock.js";
-import type { BitnobClient } from "./types.js";
+import type { BitnobClient, RequestLog } from "./types.js";
 
-export function createBitnobClient(config: AppConfig): BitnobClient {
+export function createBitnobClient(config: AppConfig, onRequest?: (log: RequestLog) => void): BitnobClient {
   if (config.bitnobMode === "live") {
     if (!config.bitnobClientId || !config.bitnobClientSecret) {
       throw new Error("BITNOB_CLIENT_ID et BITNOB_CLIENT_SECRET sont requis quand BITNOB_MODE=live.");
@@ -12,6 +12,7 @@ export function createBitnobClient(config: AppConfig): BitnobClient {
       clientId: config.bitnobClientId,
       clientSecret: config.bitnobClientSecret,
       baseUrl: config.bitnobBaseUrl,
+      onRequest,
     });
   }
   return new MockBitnobClient({

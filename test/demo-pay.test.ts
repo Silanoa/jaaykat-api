@@ -297,6 +297,25 @@ describe("DEMO_PAY_MODE", () => {
     expect(bitnob.invoiceCreates).toBe(1);
   });
 
+  it("marque expir\u00e9e une facture jamais pay\u00e9e quand le d\u00e9lai est pass\u00e9", async () => {
+    const { app, db, bitnob } = await boot("manual", 0);
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/public/invoices",
+      payload: { slug: "awa-beaute", amountXof: 1500 },
+    });
+    const id = created.json().invoice.id as string;
+    now = new Date("2026-10-17T18:10:00.000Z");
+    await reconcilePending(db, bitnob, config("manual"), app.invoicePolls);
+    expect((db.prepare("SELECT status FROM invoices WHERE id = ?").get(id) as { status: string }).status).toBe("pending");
+    now = new Date("2026-10-17T18:16:00.000Z");
+    await reconcilePending(db, bitnob, config("manual"), app.invoicePolls);
+    expect((db.prepare("SELECT status FROM invoices WHERE id = ?").get(id) as { status: string }).status).toBe("expired");
+    const polled = await app.inject({ method: "GET", url: `/api/public/invoices/${id}` });
+    expect(polled.json().status).toBe("expired");
+    expect(bitnob.invoiceCreates).toBe(0);
+  });
+
   it("accepte yas et garde free comme alias vers yas", async () => {
     const { app, db, token, idle } = await boot("manual", 0);
     const ids: string[] = [];

@@ -13,6 +13,11 @@ export async function reconcilePending(
 ): Promise<void> {
   const nowMs = config.now().getTime();
   const cutoff = new Date(nowMs - 20_000).toISOString();
+  db.prepare(
+    `UPDATE invoices SET status = 'expired'
+     WHERE status = 'pending' AND source = 'live' AND bitnob_invoice_id IS NULL
+       AND expires_at IS NOT NULL AND expires_at <= ?`,
+  ).run(new Date(nowMs).toISOString());
   const unstarted = db
     .prepare(
       `SELECT * FROM invoices

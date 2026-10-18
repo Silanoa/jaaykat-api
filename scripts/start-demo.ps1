@@ -64,6 +64,16 @@ $lines = $lines | ForEach-Object {
 if (-not $found) { $lines += "PUBLIC_URL=$url" }
 [IO.File]::WriteAllLines($envFile, $lines, (New-Object Text.UTF8Encoding $false))
 
+$archive = Join-Path $LogDir "logs-archive"
+foreach ($log in @($apiOut, $apiErr)) {
+  if ((Test-Path $log) -and (Get-Item $log).Length -gt 0) {
+    New-Item -ItemType Directory -Force $archive | Out-Null
+    $stamp = (Get-Item $log).LastWriteTime.ToString("yyyyMMdd-HHmmss")
+    Move-Item $log (Join-Path $archive ("{0}-{1}{2}" -f [IO.Path]::GetFileNameWithoutExtension($log), $stamp, [IO.Path]::GetExtension($log))) -Force
+  }
+}
+Get-ChildItem $archive -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -Skip 20 | Remove-Item -Force
+
 Start-Process -FilePath $node `
   -ArgumentList "--env-file=.env", "node_modules\tsx\dist\cli.mjs", "src/server.ts" `
   -WorkingDirectory $api -WindowStyle Hidden -RedirectStandardOutput $apiOut -RedirectStandardError $apiErr
