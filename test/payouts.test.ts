@@ -114,6 +114,40 @@ describe("retraits et ledger", () => {
     expect(quote.json().error).toBe("INSUFFICIENT_BALANCE");
   });
 
+  it("envoie à Bitnob un bénéficiaire mobile money complet avec pays et expéditeur", async () => {
+    const { app, db, bitnob, token, merchantId } = await boot();
+    credit(db, merchantId, 10_000, "live");
+    const headers = { authorization: `Bearer ${token}` };
+    const seen: Array<{ quoteId: string; body: Record<string, unknown> }> = [];
+    const original = bitnob.payouts.initialize;
+    bitnob.payouts.initialize = async (quoteId, body) => {
+      seen.push({ quoteId, body: body as unknown as Record<string, unknown> });
+      return original(quoteId, body);
+    };
+    const quote = await app.inject({
+      method: "POST",
+      url: "/api/payouts/quote",
+      headers,
+      payload: { amountXof: 5000, network: "yas", accountNumber: "771234567", accountName: "Awa Diop" },
+    });
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/payouts",
+      headers: { ...headers, "idempotency-key": "33333333-3333-3333-3333-333333333333" },
+      payload: { quoteId: quote.json().quote.id },
+    });
+    expect(created.statusCode).toBe(201);
+    expect(seen).toHaveLength(1);
+    expect(seen[0]?.body.beneficiary).toMatchObject({
+      destination_type: "mobile_money",
+      country: "SN",
+      account_name: "Awa Diop",
+      account_number: "771234567",
+      network: "free",
+      sender: { country: "SN" },
+    });
+  });
+
   it("devis puis finalise une fois, et completed seulement après le GET", async () => {
     const { app, db, token, merchantId } = await boot();
     const sats = credit(db, merchantId, 10_000, "live");

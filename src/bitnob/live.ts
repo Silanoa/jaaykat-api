@@ -184,7 +184,7 @@ export class LiveBitnobClient implements BitnobClient {
     initialize: async (quoteId, body) => {
       assertBeneficiary(body);
       return parsePayout(
-        await this.request("POST", `/api/payouts/${encodeURIComponent(quoteId)}/initialize`, { body: initializeBody(body) }),
+        await this.request("POST", `/api/payouts/${encodeURIComponent(quoteId)}/initialize`, { body: initializeBody(quoteId, body) }),
         quoteId,
       );
     },
@@ -344,7 +344,9 @@ function parseBalances(payload: unknown): { assets: BalanceAsset[] } {
       ? ((data as { assets: unknown[] }).assets)
       : data && typeof data === "object" && Array.isArray((data as { balances?: unknown }).balances)
         ? ((data as { balances: unknown[] }).balances)
-        : [];
+        : data && typeof data === "object" && Array.isArray((data as { accounts?: unknown }).accounts)
+          ? ((data as { accounts: unknown[] }).accounts)
+          : [];
   const row = z
     .object({
       asset: z.string().optional(),
@@ -353,6 +355,8 @@ function parseBalances(payload: unknown): { assets: BalanceAsset[] } {
       available: z.union([z.string(), z.number()]).optional(),
       balance: z.union([z.string(), z.number()]).optional(),
       amount: z.union([z.string(), z.number()]).optional(),
+      available_balance: z.union([z.string(), z.number()]).optional(),
+      available_balance_formatted: z.string().optional(),
     })
     .passthrough();
   const assets: BalanceAsset[] = [];
@@ -360,7 +364,8 @@ function parseBalances(payload: unknown): { assets: BalanceAsset[] } {
     const parsed = row.safeParse(item);
     if (!parsed.success) continue;
     const asset = parsed.data.asset || parsed.data.currency || parsed.data.code;
-    const available = parsed.data.available ?? parsed.data.balance ?? parsed.data.amount;
+    const formatted = parsed.data.available_balance_formatted?.trim().split(/\s+/)[0];
+    const available = formatted ?? parsed.data.available ?? parsed.data.balance ?? parsed.data.amount ?? parsed.data.available_balance;
     if (!asset || available === undefined) continue;
     assets.push({ asset, available: String(available) });
   }
@@ -468,7 +473,7 @@ function parseQuote(payload: unknown, input: QuoteInput): PayoutQuote {
     .safeParse(unwrapPayout(payload));
   if (!parsed.success) throw new BitnobError("Réponse de devis Bitnob inattendue.", { status: 502, path: "/api/payouts/quotes", body: payload });
   const row = parsed.data;
-  const id = row.id ?? row.quote_id;
+  const id = row.quote_id ?? row.id;
   const expiry = row.expires_at ?? row.expiresAt;
   if (id === undefined || expiry === undefined) {
     throw new BitnobError("Champs du devis Bitnob à constater (id ou échéance).", { status: 502, path: "/api/payouts/quotes", body: payload });
@@ -490,9 +495,13 @@ function parseQuote(payload: unknown, input: QuoteInput): PayoutQuote {
   };
 }
 
-function initializeBody(body: InitializePayoutInput): Record<string, unknown> {
+const PAYMENT_REASON = "vendor_payment";
+
+function initializeBody(quoteId: string, body: InitializePayoutInput): Record<string, unknown> {
   return omitEmpty({
+    quote_id: quoteId,
     reference: body.reference,
+    payment_reason: body.paymentReason ?? PAYMENT_REASON,
     callback_url: body.callbackUrl,
     customer_id: body.customerId,
     beneficiary: body.beneficiary,

@@ -133,6 +133,7 @@ export interface QuoteInput {
 export interface InitializePayoutInput {
   reference: string;
   callbackUrl: string;
+  paymentReason?: string;
   customerId?: string;
   beneficiary: Record<string, unknown>;
 }

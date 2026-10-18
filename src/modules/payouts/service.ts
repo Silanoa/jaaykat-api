@@ -285,6 +285,7 @@ async function advance(db: Database, bitnob: BitnobClient, config: AppConfig, ro
         customerId: merchant?.bitnob_customer_id ?? undefined,
         beneficiary: {
           destination_type: "mobile_money",
+          country: "SN",
           account_name: current.account_name,
           account_number: account,
           network: current.network,
