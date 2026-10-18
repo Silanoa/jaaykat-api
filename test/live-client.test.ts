@@ -288,4 +288,47 @@ describe("client Bitnob live", () => {
     expect(fallback.json().env).toBe("live");
     await app.close();
   });
+
+  it("ne rejoue automatiquement que les lectures et la creation de facture par reference", async () => {
+    const hits = new Map<string, number>();
+    const fake = await listen((req, res, body) => {
+      const key = `${req.method} ${req.url?.split("?")[0]}`;
+      const count = (hits.get(key) ?? 0) + 1;
+      hits.set(key, count);
+      if (key === "POST /api/lightning/invoices" && count >= 2) {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ data: { id: "inv_1", status: "pending", request: "lntb1x", expires_at: 4102444800, amount: 1000, reference: "ref-1" } }));
+        return;
+      }
+      res.writeHead(503, { "content-type": "application/json" });
+      res.end(JSON.stringify({ message: "down", body }));
+    });
+    closers.push(fake.close);
+    const client = new LiveBitnobClient({
+      clientId: CLIENT_ID,
+      clientSecret: SECRET,
+      baseUrl: fake.baseUrl,
+      lookupIp: async () => null,
+      retryDelayMs: 0,
+    });
+    await expect(client.balances.get()).rejects.toMatchObject({ status: 503 });
+    expect(hits.get("GET /api/balances")).toBe(3);
+    await client.lightning.createInvoice({ amountSats: 1000, reference: "ref-1", expiresInSeconds: 900, autoSettle: true } as never);
+    expect(hits.get("POST /api/lightning/invoices")).toBe(2);
+    await expect(
+      client.payouts.quote({ amount: 10, country: "SN", fromAsset: "USDT", toCurrency: "XOF", source: "offchain", reference: "q-1" } as never),
+    ).rejects.toMatchObject({ status: 503 });
+    expect(hits.get("POST /api/payouts/quotes")).toBe(1);
+    await expect(
+      client.payouts.initialize("QT2_1", {
+        reference: "p-1",
+        callbackUrl: "https://demo.example/webhooks/bitnob",
+        customerId: "cus_1",
+        beneficiary: { account_number: "771234567", network: "wave", account_name: "Awa Diop" },
+      } as never),
+    ).rejects.toMatchObject({ status: 503 });
+    expect(hits.get("POST /api/payouts/QT2_1/initialize")).toBe(1);
+    await expect(client.payouts.finalize("QT2_1")).rejects.toMatchObject({ status: 503 });
+    expect(hits.get("POST /api/payouts/QT2_1/finalize")).toBe(1);
+  });
 });

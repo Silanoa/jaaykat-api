@@ -205,7 +205,7 @@ export class LiveBitnobClient implements BitnobClient {
   async request<T>(method: string, path: string, opts?: { query?: Record<string, unknown>; body?: unknown }): Promise<T> {
     const hasBody = opts?.body !== undefined && method !== "GET" && method !== "HEAD";
     const rawBody = hasBody ? JSON.stringify(opts.body) : "";
-    const retryable = method === "GET" || method === "HEAD" || hasReference(opts?.body);
+    const retryable = method === "GET" || method === "HEAD" || (path === "/api/lightning/invoices" && hasReference(opts?.body));
     const attempts = retryable ? this.maxRetries + 1 : 1;
     let lastError: unknown;
     for (let attempt = 1; attempt <= attempts; attempt += 1) {
