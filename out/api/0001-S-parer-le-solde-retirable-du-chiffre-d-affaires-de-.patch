@@ -1,0 +1,246 @@
+From daed0e8091f8f5a1573dd530a406b741018c6380 Mon Sep 17 00:00:00 2001
+From: Silanoa <rosalexahan2@gmail.com>
+Date: Sun, 18 Oct 2026 09:19:33 +0000
+Subject: [PATCH 1/4] =?UTF-8?q?S=C3=A9parer=20le=20solde=20retirable=20du?=
+ =?UTF-8?q?=20chiffre=20d'affaires=20de=20d=C3=A9monstration=20et=20pr?=
+ =?UTF-8?q?=C3=A9ciser=20le=20refus?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+---
+ src/modules/payouts/service.ts | 23 +++++++++-
+ test/helpers.ts                | 80 ++++++++++++++++++++++++++++++++
+ test/seed-withdrawable.test.ts | 83 ++++++++++++++++++++++++++++++++++
+ 3 files changed, 184 insertions(+), 2 deletions(-)
+ create mode 100644 test/helpers.ts
+ create mode 100644 test/seed-withdrawable.test.ts
+
+diff --git a/src/modules/payouts/service.ts b/src/modules/payouts/service.ts
+index e296aba..1fab8ff 100644
+--- a/src/modules/payouts/service.ts
++++ b/src/modules/payouts/service.ts
+@@ -55,8 +55,23 @@ export function ledgerOf(db: Database, merchantId: string, now: Date): { balance
+   return { balanceXof, balanceSats };
+ }
+ 
++export function demoSalesOf(db: Database, merchantId: string): { revenueXof: number; salesCount: number } {
++  const row = db
++    .prepare(
++      `SELECT COALESCE(SUM(amount_xof), 0) AS revenueXof, COUNT(*) AS salesCount
++       FROM invoices WHERE merchant_id = ? AND status = 'paid' AND source = 'seed'`,
++    )
++    .get(merchantId) as { revenueXof: number; salesCount: number };
++  return row;
++}
++
++function formatXof(value: number): string {
++  return `${new Intl.NumberFormat("fr-FR").format(value).replace(/[\u202f\u00a0]/g, "\u00a0")}\u00a0F`;
++}
++
+ export function balanceView(db: Database, merchantId: string, now: Date) {
+   const ledger = ledgerOf(db, merchantId, now);
++  const demo = demoSalesOf(db, merchantId);
+   const lastPayouts = (
+     db
+       .prepare(
+@@ -65,7 +80,7 @@ export function balanceView(db: Database, merchantId: string, now: Date) {
+       )
+       .all(merchantId) as { id: string; amountXof: number; network: SnNetwork; status: PayoutRow["status"]; createdAt: string }[]
+   );
+-  return { ...ledger, lastPayouts };
++  return { ...ledger, demoRevenueXof: demo.revenueXof, demoSalesCount: demo.salesCount, lastPayouts };
+ }
+ 
+ export async function quotePayout(
+@@ -91,7 +106,11 @@ export async function quotePayout(
+   const now = config.now();
+   const ledger = ledgerOf(db, merchantId, now);
+   if (input.amountXof > ledger.balanceXof) {
+-    throw new AppError(422, "INSUFFICIENT_BALANCE", "Solde insuffisant. L'historique simulé n'est pas retirable.");
++    const retirable = Math.max(0, ledger.balanceXof);
++    const demoNote = demoSalesOf(db, merchantId).salesCount > 0 ? " Le chiffre d'affaires de démonstration n'est pas retirable." : "";
++    throw new AppError(422, "INSUFFICIENT_BALANCE", `Solde retirable insuffisant : ${formatXof(retirable)} disponibles.${demoNote}`, {
++      retirableXof: retirable,
++    });
+   }
+   const merchant = db.prepare("SELECT id, slug, display_name, bitnob_customer_id FROM merchants WHERE id = ?").get(merchantId) as
+     | { id: string; slug: string; display_name: string; bitnob_customer_id: string | null }
+diff --git a/test/helpers.ts b/test/helpers.ts
+new file mode 100644
+index 0000000..8110a0c
+--- /dev/null
++++ b/test/helpers.ts
+@@ -0,0 +1,80 @@
++import type { FastifyInstance } from "fastify";
++import { buildApp } from "../src/app.js";
++import { MockBitnobClient } from "../src/bitnob/mock.js";
++import type { AppConfig } from "../src/config.js";
++import { openDatabase } from "../src/db/client.js";
++import { ulid } from "../src/ids.js";
++
++export type TestDb = ReturnType<typeof openDatabase>;
++
++export function testConfig(clock: { now: Date }): AppConfig {
++  return {
++    nodeEnv: "test",
++    port: 0,
++    databasePath: ":memory:",
++    publicUrl: "https://demo.example",
++    bitnobMode: "mock",
++    bitnobBaseUrl: "https://api.bitnob.com",
++    bitnobClientId: "mock",
++    bitnobClientSecret: "mock",
++    webhookSecret: "whsec_test",
++    phonePepper: "phone-pepper-0123456789abcdef",
++    payerPepper: "payer-pepper-0123456789abcdef",
++    publicDir: "/tmp/jaaykat-no-public",
++    autoSettle: true,
++    demoPayMode: "auto",
++    payoutFromAsset: "USDT",
++    reconcileIntervalMs: 0,
++    now: () => clock.now,
++  };
++}
++
++export async function bootApp(clock: { now: Date }, db: TestDb = openDatabase(":memory:")) {
++  const config = testConfig(clock);
++  const bitnob = new MockBitnobClient({ clientId: "mock", clientSecret: "mock", settleAfterMs: 0, now: () => clock.now.getTime() });
++  const app: FastifyInstance = await buildApp({ db, bitnob, config, bitnobEnv: "mock" });
++  return { app, db, config };
++}
++
++export async function registerMerchant(app: FastifyInstance, phone = "77 123 45 67", shopName = "Chez Awa") {
++  const created = await app.inject({
++    method: "POST",
++    url: "/api/auth/register",
++    payload: { shopName, category: "beaute", firstName: "Awa", lastName: "Diop", phone, pin: "482915" },
++  });
++  if (created.statusCode !== 201) throw new Error(`register ${created.statusCode} ${created.body}`);
++  return { headers: { authorization: `Bearer ${created.json().token as string}` } };
++}
++
++let counter = 0;
++
++export function insertSale(
++  db: TestDb,
++  merchantId: string,
++  sale: { amountXof: number; at: Date; status?: "paid" | "expired" | "pending"; source?: "live" | "seed" },
++): void {
++  counter += 1;
++  const rate = 64_000 * 605;
++  const status = sale.status ?? "paid";
++  db.prepare(
++    `INSERT INTO invoices (
++       id, merchant_id, reference, amount_sats, amount_xof, rate_btc_xof, rate_source,
++       channel, status, source, created_at, paid_at
++     ) VALUES (?, ?, ?, ?, ?, ?, 'btc_usd*usd_xof', 'dynamic', ?, ?, ?, ?)`,
++  ).run(
++    ulid(sale.at.getTime() + counter),
++    merchantId,
++    `jk_test_${counter}_${sale.at.getTime()}`,
++    Math.max(1, Math.round((sale.amountXof / rate) * 1e8)),
++    sale.amountXof,
++    rate,
++    status,
++    sale.source ?? "live",
++    sale.at.toISOString(),
++    status === "paid" ? sale.at.toISOString() : null,
++  );
++}
++
++export function merchantIdOf(db: TestDb): string {
++  return (db.prepare("SELECT id FROM merchants ORDER BY created_at LIMIT 1").get() as { id: string }).id;
++}
+diff --git a/test/seed-withdrawable.test.ts b/test/seed-withdrawable.test.ts
+new file mode 100644
+index 0000000..be95e00
+--- /dev/null
++++ b/test/seed-withdrawable.test.ts
+@@ -0,0 +1,83 @@
++import type { FastifyInstance } from "fastify";
++import { afterEach, describe, expect, it } from "vitest";
++import { openDatabase } from "../src/db/client.js";
++import { seedDemo } from "../src/db/seed.js";
++import { bootApp, insertSale, merchantIdOf } from "./helpers.js";
++
++describe("historique de démonstration non retirable", () => {
++  const apps: FastifyInstance[] = [];
++  const clock = { now: new Date("2026-10-17T18:00:00.000Z") };
++
++  afterEach(async () => {
++    await Promise.all(apps.splice(0).map((app) => app.close()));
++  });
++
++  async function boot() {
++    const db = openDatabase(":memory:");
++    const { app, config } = await bootApp(clock, db);
++    apps.push(app);
++    seedDemo(db, config);
++    const login = await app.inject({ method: "POST", url: "/api/auth/login", payload: { phone: "771234567", pin: "482915" } });
++    expect(login.statusCode).toBe(200);
++    return { app, db, headers: { authorization: `Bearer ${login.json().token as string}` } };
++  }
++
++  const quoteBody = (amountXof: number) => ({ amountXof, network: "wave", accountNumber: "771234567", accountName: "Awa Diop" });
++
++  it("sépare le solde retirable du chiffre d'affaires de démonstration", async () => {
++    const { app, db, headers } = await boot();
++    const seeded = db.prepare("SELECT COUNT(*) AS n, COALESCE(SUM(amount_xof), 0) AS xof FROM invoices WHERE source = 'seed' AND status = 'paid'").get() as { n: number; xof: number };
++    expect(seeded.n).toBeGreaterThan(50);
++    const balance = (await app.inject({ method: "GET", url: "/api/balance", headers })).json();
++    expect(balance.balanceXof).toBe(0);
++    expect(balance.balanceSats).toBe(0);
++    expect(balance.demoRevenueXof).toBe(seeded.xof);
++    expect(balance.demoSalesCount).toBe(seeded.n);
++  });
++
++  it("refuse un devis sur le seul historique avec un message français clair", async () => {
++    const { app, headers } = await boot();
++    const res = await app.inject({ method: "POST", url: "/api/payouts/quote", headers, payload: quoteBody(1000) });
++    expect(res.statusCode).toBe(422);
++    expect(res.json().error).toBe("INSUFFICIENT_BALANCE");
++    expect(res.json().retirableXof).toBe(0);
++    expect(res.json().message).toBe("Solde retirable insuffisant : 0\u00a0F disponibles. Le chiffre d'affaires de démonstration n'est pas retirable.");
++  });
++
++  it("ne retire que les ventes réelles même quand le seed est plus gros", async () => {
++    const { app, db, headers } = await boot();
++    insertSale(db, merchantIdOf(db), { amountXof: 8000, at: new Date("2026-10-17T10:00:00.000Z") });
++    const balance = (await app.inject({ method: "GET", url: "/api/balance", headers })).json();
++    expect(balance.balanceXof).toBe(8000);
++    expect(balance.demoRevenueXof).toBeGreaterThan(100_000);
++
++    const over = await app.inject({ method: "POST", url: "/api/payouts/quote", headers, payload: quoteBody(8100) });
++    expect(over.statusCode).toBe(422);
++    expect(over.json().retirableXof).toBe(8000);
++    expect(over.json().message).toContain("8\u00a0000\u00a0F disponibles");
++
++    const exact = await app.inject({ method: "POST", url: "/api/payouts/quote", headers, payload: quoteBody(8000) });
++    expect(exact.statusCode).toBe(200);
++    const after = (await app.inject({ method: "GET", url: "/api/balance", headers })).json();
++    expect(after.balanceXof).toBe(0);
++    const again = await app.inject({ method: "POST", url: "/api/payouts/quote", headers, payload: quoteBody(100) });
++    expect(again.statusCode).toBe(422);
++  });
++
++  it("n'annonce aucun chiffre d'affaires de démonstration à un marchand sans seed", async () => {
++    const db = openDatabase(":memory:");
++    const { app } = await bootApp(clock, db);
++    apps.push(app);
++    const created = await app.inject({
++      method: "POST",
++      url: "/api/auth/register",
++      payload: { shopName: "Chez Fatou", category: "beaute", firstName: "Fatou", lastName: "Ba", phone: "77 555 00 11", pin: "482915" },
++    });
++    const headers = { authorization: `Bearer ${created.json().token as string}` };
++    const balance = (await app.inject({ method: "GET", url: "/api/balance", headers })).json();
++    expect(balance).toMatchObject({ balanceXof: 0, demoRevenueXof: 0, demoSalesCount: 0 });
++    const res = await app.inject({ method: "POST", url: "/api/payouts/quote", headers, payload: quoteBody(1000) });
++    expect(res.statusCode).toBe(422);
++    expect(res.json().message).toBe("Solde retirable insuffisant : 0\u00a0F disponibles.");
++  });
++});
+-- 
+2.47.3
+

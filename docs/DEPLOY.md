@@ -48,10 +48,16 @@ cloudflared tunnel --url http://localhost:3000
 
 # 4. Reporter l'URL aux 4 endroits
 # - PUBLIC_URL dans .env (redémarrer API)
+# - DEMO_PAY_MODE=manual si le client doit scanner le QR puis choisir Lightning/Wave/Orange/Yas/Expresso
+#   (auto, défaut : la facture Bitnob est créée tout de suite, auto_settle)
 # - Webhook Bitnob dashboard → .../webhooks/bitnob
 # - Réinstaller PWA téléphone A depuis cette URL
 # - Régénérer / imprimer affiche A6 QR
 ```
+
+## Relance sur le laptop Windows
+
+`scripts/start-demo.ps1` arrête l'API, garde ou relance `cloudflared`, met `PUBLIC_URL` à jour dans `.env`, archive les anciens `api-out.txt` et `api-err.txt` dans `%USERPROFILE%\logs-archive` (20 fichiers conservés), lance `tsx src/server.ts` en tâche cachée et vérifie `/api/health` en local puis via le tunnel. Avec `-KeepTunnel`, un tunnel déjà actif et son URL sont conservés ; sans l'option, une nouvelle URL est créée et le webhook Bitnob doit être mis à jour. Après un changement du web : `pnpm build` dans `jaaykat-web`, copie de `dist` vers `jaaykat-api/public`, puis le script.
 
 ## Publication SDK (collègue, bloc 5 ~06h30–09h00)
 

@@ -1,0 +1,587 @@
+From c182ec1c94899114d5db5820810222bdc29b329b Mon Sep 17 00:00:00 2001
+From: Silanoa <rosalexahan2@gmail.com>
+Date: Sun, 18 Oct 2026 09:22:14 +0000
+Subject: [PATCH 2/4] =?UTF-8?q?R=C3=A9server=20l'attestation=20aux=20march?=
+ =?UTF-8?q?ands=20=C3=A9ligibles=20et=20figer=20son=20contenu=20v=C3=A9rif?=
+ =?UTF-8?q?iable?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+---
+ src/app.ts                   |   2 +-
+ src/db/client.ts             |  16 ++-
+ src/db/schema.sql            |   3 +-
+ src/modules/score/formula.ts |  46 ++++++++-
+ src/routes/analytics.ts      | 128 +++++++++++++++++------
+ test/attestation.test.ts     | 192 +++++++++++++++++++++++++++++++++++
+ test/dashboard-http.test.ts  |   8 +-
+ test/demo-pay.test.ts        |   2 +-
+ 8 files changed, 350 insertions(+), 47 deletions(-)
+ create mode 100644 test/attestation.test.ts
+
+diff --git a/src/app.ts b/src/app.ts
+index 2611535..8f07d59 100644
+--- a/src/app.ts
++++ b/src/app.ts
+@@ -94,7 +94,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
+   registerInvoiceRoutes(app, db, bitnob, config, rates, polls);
+   registerPublicRoutes(app, db, bitnob, config, rates, polls);
+   registerWebhookRoute(app, db, bitnob, config);
+-  registerAnalyticsRoutes(app, db, config);
++  registerAnalyticsRoutes(app, db, config, bitnobEnv);
+   registerPayoutRoutes(app, db, bitnob, config, rates);
+   if (config.reconcileIntervalMs > 0) {
+     const timer = setInterval(() => {
+diff --git a/src/db/client.ts b/src/db/client.ts
+index 909024d..627b198 100644
+--- a/src/db/client.ts
++++ b/src/db/client.ts
+@@ -13,13 +13,19 @@ export function openDatabase(path: string): Database.Database {
+   const version = db.pragma("user_version", { simple: true }) as number;
+   if (version < 1) {
+     db.exec(schemaSql);
+-    db.pragma("user_version = 2");
+-  } else if (version < 2) {
+-    const columns = db.prepare("PRAGMA table_info(invoices)").all() as { name: string }[];
+-    if (!columns.some((column) => column.name === "simulated_method")) {
++  } else {
++    if (version < 2 && !hasColumn(db, "invoices", "simulated_method")) {
+       db.exec("ALTER TABLE invoices ADD COLUMN simulated_method TEXT");
+     }
+-    db.pragma("user_version = 2");
++    if (version < 3 && hasColumn(db, "score_shares", "token_id")) {
++      if (!hasColumn(db, "score_shares", "snapshot")) db.exec("ALTER TABLE score_shares ADD COLUMN snapshot TEXT");
++      db.exec("UPDATE score_shares SET revoked = 1 WHERE snapshot IS NULL");
++    }
+   }
++  if (version < 3) db.pragma("user_version = 3");
+   return db;
+ }
++
++function hasColumn(db: Database.Database, table: string, column: string): boolean {
++  return (db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]).some((entry) => entry.name === column);
++}
+diff --git a/src/db/schema.sql b/src/db/schema.sql
+index 3b53e6c..20799eb 100644
+--- a/src/db/schema.sql
++++ b/src/db/schema.sql
+@@ -139,7 +139,8 @@ CREATE TABLE score_shares (
+   merchant_id TEXT NOT NULL,
+   score_id TEXT NOT NULL,
+   expires_at TEXT NOT NULL,
+-  revoked INTEGER NOT NULL DEFAULT 0
++  revoked INTEGER NOT NULL DEFAULT 0,
++  snapshot TEXT
+ );
+ 
+ CREATE VIEW daily_sales AS
+diff --git a/src/modules/score/formula.ts b/src/modules/score/formula.ts
+index 02a71aa..3681d34 100644
+--- a/src/modules/score/formula.ts
++++ b/src/modules/score/formula.ts
+@@ -35,6 +35,46 @@ const WEIGHTS: Record<keyof ScoreComponents, number> = {
+ 
+ const VOLUME_CAP = 1_500_000;
+ 
++export const WINDOW_DAYS = 90;
++export const MIN_DAYS = 14;
++export const MIN_SALES = 20;
++
++export interface Remaining {
++  days: number;
++  sales: number;
++}
++
++export function remainingToEligible(progress: { days: number; sales: number }): Remaining {
++  return { days: Math.max(0, MIN_DAYS - progress.days), sales: Math.max(0, MIN_SALES - progress.sales) };
++}
++
++export function eligibilityMessage(remaining: Remaining): string {
++  const parts: string[] = [];
++  if (remaining.sales > 0) parts.push(`${remaining.sales} vente${remaining.sales > 1 ? "s" : ""} payée${remaining.sales > 1 ? "s" : ""}`);
++  if (remaining.days > 0) parts.push(`${remaining.days} jour${remaining.days > 1 ? "s" : ""}`);
++  return `Encore ${parts.join(" et ")} pour être éligible.`;
++}
++
++export function paidInWindow(sales: SalePoint[], now: Date): SalePoint[] {
++  const start = now.getTime() - WINDOW_DAYS * 86_400_000;
++  return sales.filter((sale) => sale.status === "paid" && Date.parse(sale.at) >= start && Date.parse(sale.at) <= now.getTime());
++}
++
++export function attestationFacts(sales: SalePoint[], now: Date) {
++  const paid = paidInWindow(sales, now);
++  const from = paid.reduce<string | null>((earliest, sale) => {
++    const key = dakarParts(new Date(sale.at)).dateKey;
++    return earliest === null || key < earliest ? key : earliest;
++  }, null);
++  return {
++    salesCount: paid.length,
++    totalXof: paid.reduce((sum, sale) => sum + sale.amountXof, 0),
++    from,
++    to: dakarParts(now).dateKey,
++    demo: paid.some((sale) => sale.source === "seed"),
++  };
++}
++
+ export function scoreFromComponents(components: ScoreComponents, eligible: boolean, progress = { days: 0, sales: 0 }): ScoreResult {
+   const weighted =
+     WEIGHTS.regularity * components.regularity +
+@@ -55,9 +95,9 @@ export function scoreFromComponents(components: ScoreComponents, eligible: boole
+ }
+ 
+ export function scoreFromSales(sales: SalePoint[], now: Date): ScoreResult {
+-  const start = now.getTime() - 90 * 86_400_000;
++  const start = now.getTime() - WINDOW_DAYS * 86_400_000;
+   const inWindow = sales.filter((sale) => Date.parse(sale.at) >= start && Date.parse(sale.at) <= now.getTime());
+-  const paid = inWindow.filter((sale) => sale.status === "paid");
++  const paid = paidInWindow(sales, now);
+   const expired = inWindow.filter((sale) => sale.status === "expired");
+   const first = paid.reduce<string | null>((earliest, sale) => {
+     const key = dakarParts(new Date(sale.at)).dateKey;
+@@ -76,7 +116,7 @@ export function scoreFromSales(sales: SalePoint[], now: Date): ScoreResult {
+   const volume = Math.min(1, Math.log10(1 + revenue30) / Math.log10(1 + VOLUME_CAP));
+   const fidelity = fidelityScore(paid);
+   const quality = paid.length + expired.length === 0 ? 1 : paid.length / (paid.length + expired.length);
+-  const eligible = days >= 14 && paid.length >= 20;
++  const eligible = days >= MIN_DAYS && paid.length >= MIN_SALES;
+   return scoreFromComponents(
+     { regularity, growth, volume, fidelity, quality },
+     eligible,
+diff --git a/src/routes/analytics.ts b/src/routes/analytics.ts
+index a9fed1c..04d2f05 100644
+--- a/src/routes/analytics.ts
++++ b/src/routes/analytics.ts
+@@ -8,7 +8,40 @@ import { makeRequireAuth } from "../auth/require-auth.js";
+ import { dashboardFromSales, type DashboardRange } from "../modules/analytics/dashboard.js";
+ import type { SalePoint } from "../modules/analytics/types.js";
+ import type { InvoiceRow } from "../modules/invoices/service.js";
+-import { scoreFromSales, type ScoreResult } from "../modules/score/formula.js";
++import {
++  attestationFacts,
++  eligibilityMessage,
++  remainingToEligible,
++  scoreFromSales,
++  MIN_DAYS,
++  MIN_SALES,
++  WINDOW_DAYS,
++  type ScoreResult,
++} from "../modules/score/formula.js";
++
++const SHARE_VALIDITY_MS = 7 * 86_400_000;
++const ID_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
++
++interface AttestationSnapshot {
++  attestationId: string;
++  shopName: string;
++  score: number;
++  band: "A" | "B" | "C" | "D";
++  windowDays: number;
++  periodFrom: string;
++  periodTo: string;
++  salesCount: number;
++  totalXof: number;
++  demo: boolean;
++  environment: string;
++  issuedAt: string;
++}
++
++function attestationId(): string {
++  const bytes = randomBytes(8);
++  const chars = Array.from(bytes, (byte) => ID_ALPHABET[byte % ID_ALPHABET.length]);
++  return `JK-${chars.slice(0, 4).join("")}-${chars.slice(4).join("")}`;
++}
+ 
+ function loadSales(db: Database, merchantId: string): SalePoint[] {
+   const rows = db
+@@ -48,11 +81,14 @@ function persistScore(db: Database, merchantId: string, score: ScoreResult, now:
+   return id;
+ }
+ 
+-function scorePayload(score: ScoreResult, now: Date) {
++function scorePayload(score: ScoreResult, now: Date, demo: boolean) {
+   return {
+     score: score.score,
+     band: score.band,
+     eligible: score.eligible,
++    demo,
++    thresholds: { days: MIN_DAYS, sales: MIN_SALES },
++    remaining: remainingToEligible(score.progress),
+     computedAt: now.toISOString(),
+     progress: {
+       daysSinceFirst: score.progress.days,
+@@ -69,7 +105,7 @@ function scorePayload(score: ScoreResult, now: Date) {
+   };
+ }
+ 
+-function presentDashboard(result: ReturnType<typeof dashboardFromSales>) {
++function presentDashboard(result: ReturnType<typeof dashboardFromSales>, demo: boolean) {
+   const heatmap = result.heatmap.flatMap((row, weekday) =>
+     row.map((cell, hour) => ({
+       weekday,
+@@ -91,6 +127,7 @@ function presentDashboard(result: ReturnType<typeof dashboardFromSales>) {
+   }
+   return {
+     range: result.range,
++    demo,
+     kpis: {
+       revenueXof: result.kpis.revenueXof,
+       revenueDeltaPct: result.kpis.deltaPct,
+@@ -113,34 +150,57 @@ function parseRange(value: unknown): DashboardRange {
+   throw new AppError(400, "VALIDATION", "Période invalide.", { fields: { range: "today, 7d ou 30d" } });
+ }
+ 
+-export function registerAnalyticsRoutes(app: FastifyInstance, db: Database, config: AppConfig): void {
++export function registerAnalyticsRoutes(app: FastifyInstance, db: Database, config: AppConfig, bitnobEnv: string): void {
+   const requireAuth = makeRequireAuth(db, config);
+ 
+   app.get("/api/dashboard", { preHandler: requireAuth }, async (req) => {
+     if (!req.auth) throw new AppError(401, "UNAUTHENTICATED", "Connexion requise.");
+     const query = req.query as { range?: string };
+     const range = parseRange(query.range);
+-    return presentDashboard(dashboardFromSales(loadSales(db, req.auth.merchantId), range, config.now()));
++    const sales = loadSales(db, req.auth.merchantId);
++    return presentDashboard(dashboardFromSales(sales, range, config.now()), sales.some((sale) => sale.source === "seed"));
+   });
+ 
+   app.get("/api/score", { preHandler: requireAuth }, async (req) => {
+     if (!req.auth) throw new AppError(401, "UNAUTHENTICATED", "Connexion requise.");
+     const now = config.now();
+-    const score = scoreFromSales(loadSales(db, req.auth.merchantId), now);
+-    persistScore(db, req.auth.merchantId, score, now);
+-    return scorePayload(score, now);
++    const sales = loadSales(db, req.auth.merchantId);
++    return scorePayload(scoreFromSales(sales, now), now, attestationFacts(sales, now).demo);
+   });
+ 
+   app.post("/api/score/share", { preHandler: requireAuth }, async (req) => {
+     if (!req.auth) throw new AppError(401, "UNAUTHENTICATED", "Connexion requise.");
+     const now = config.now();
+-    const score = scoreFromSales(loadSales(db, req.auth.merchantId), now);
++    const sales = loadSales(db, req.auth.merchantId);
++    const score = scoreFromSales(sales, now);
++    if (!score.eligible || score.score === null || score.band === null) {
++      const remaining = remainingToEligible(score.progress);
++      throw new AppError(422, "NOT_ELIGIBLE", `Attestation indisponible. ${eligibilityMessage(remaining)}`, { remaining });
++    }
++    const facts = attestationFacts(sales, now);
++    const merchant = db.prepare("SELECT display_name AS shopName FROM merchants WHERE id = ?").get(req.auth.merchantId) as
++      | { shopName: string }
++      | undefined;
++    if (!merchant || facts.from === null) throw new AppError(401, "UNAUTHENTICATED", "Connexion requise.");
++    const snapshot: AttestationSnapshot = {
++      attestationId: attestationId(),
++      shopName: merchant.shopName,
++      score: score.score,
++      band: score.band,
++      windowDays: WINDOW_DAYS,
++      periodFrom: facts.from,
++      periodTo: facts.to,
++      salesCount: facts.salesCount,
++      totalXof: facts.totalXof,
++      demo: facts.demo,
++      environment: bitnobEnv,
++      issuedAt: now.toISOString(),
++    };
+     const scoreId = persistScore(db, req.auth.merchantId, score, now);
+     const token = randomBytes(32).toString("base64url");
+-    const expiresAt = new Date(now.getTime() + 7 * 86_400_000).toISOString();
+     db.prepare(
+-      `INSERT INTO score_shares (token_id, merchant_id, score_id, expires_at, revoked) VALUES (?, ?, ?, ?, 0)`,
+-    ).run(token, req.auth.merchantId, scoreId, expiresAt);
++      `INSERT INTO score_shares (token_id, merchant_id, score_id, expires_at, revoked, snapshot) VALUES (?, ?, ?, ?, 0, ?)`,
++    ).run(token, req.auth.merchantId, scoreId, new Date(now.getTime() + SHARE_VALIDITY_MS).toISOString(), JSON.stringify(snapshot));
+     const path = `/s/${token}`;
+     return { url: config.publicUrl ? `${config.publicUrl}${path}` : path };
+   });
+@@ -182,28 +242,30 @@ export function registerAnalyticsRoutes(app: FastifyInstance, db: Database, conf
+ 
+ export function readPublicShare(db: Database, token: string, now: Date) {
+   const share = db
+-    .prepare(
+-      `SELECT s.expires_at AS expiresAt, s.revoked AS revoked, m.display_name AS shopName,
+-              c.components AS components, c.computed_at AS computedAt
+-       FROM score_shares s
+-       JOIN merchants m ON m.id = s.merchant_id
+-       JOIN credit_scores c ON c.id = s.score_id
+-       WHERE s.token_id = ?`,
+-    )
+-    .get(token) as
+-    | { expiresAt: string; revoked: number; shopName: string; components: string; computedAt: string }
+-    | undefined;
+-  if (!share) throw new AppError(404, "NOT_FOUND", "Attestation introuvable.");
+-  const score = JSON.parse(share.components) as ScoreResult;
++    .prepare(`SELECT expires_at AS expiresAt, revoked, snapshot FROM score_shares WHERE token_id = ?`)
++    .get(token) as { expiresAt: string; revoked: number; snapshot: string | null } | undefined;
++  if (!share || share.snapshot === null) throw new AppError(404, "NOT_FOUND", "Attestation introuvable.");
++  const snapshot = JSON.parse(share.snapshot) as AttestationSnapshot;
+   const status = share.revoked ? "revoked" : share.expiresAt <= now.toISOString() ? "expired" : "valid";
+-  return {
+-    shopName: share.shopName,
+-    score: score.score,
+-    band: score.band,
+-    period: `${score.windowDays} jours`,
+-    salesCount: score.progress.sales,
+-    computedAt: share.computedAt,
+-    expiresAt: share.expiresAt,
++  const base = {
++    attestationId: snapshot.attestationId,
++    shopName: snapshot.shopName,
+     status,
++    issuedAt: snapshot.issuedAt,
++    expiresAt: share.expiresAt,
++    demo: snapshot.demo,
++    environment: snapshot.environment,
++    windowDays: snapshot.windowDays,
++  };
++  if (status === "revoked") {
++    return { ...base, score: null, band: null, period: null, salesCount: null, totalXof: null };
++  }
++  return {
++    ...base,
++    score: snapshot.score,
++    band: snapshot.band,
++    period: { from: snapshot.periodFrom, to: snapshot.periodTo },
++    salesCount: snapshot.salesCount,
++    totalXof: snapshot.totalXof,
+   };
+ }
+diff --git a/test/attestation.test.ts b/test/attestation.test.ts
+new file mode 100644
+index 0000000..805f697
+--- /dev/null
++++ b/test/attestation.test.ts
+@@ -0,0 +1,192 @@
++import { mkdtempSync, rmSync } from "node:fs";
++import { tmpdir } from "node:os";
++import { join } from "node:path";
++import type { FastifyInstance } from "fastify";
++import { afterEach, describe, expect, it } from "vitest";
++import { openDatabase } from "../src/db/client.js";
++import { seedDemo } from "../src/db/seed.js";
++import { bootApp, insertSale, merchantIdOf, registerMerchant, type TestDb } from "./helpers.js";
++
++const DAY = 86_400_000;
++
++describe("score et attestation", () => {
++  const apps: FastifyInstance[] = [];
++  const clock = { now: new Date("2026-10-17T18:00:00.000Z") };
++
++  afterEach(async () => {
++    clock.now = new Date("2026-10-17T18:00:00.000Z");
++    await Promise.all(apps.splice(0).map((app) => app.close()));
++  });
++
++  async function boot() {
++    const { app, db } = await bootApp(clock);
++    apps.push(app);
++    const { headers } = await registerMerchant(app);
++    return { app, db, headers, merchantId: merchantIdOf(db) };
++  }
++
++  function sellOverDays(db: TestDb, merchantId: string, count: number, spanDays: number) {
++    for (let index = 0; index < count; index += 1) {
++      const daysAgo = spanDays === 0 ? 0 : index % (spanDays + 1);
++      insertSale(db, merchantId, { amountXof: 1000, at: new Date(clock.now.getTime() - daysAgo * DAY - 6 * 3_600_000) });
++    }
++  }
++
++  it("annonce les seuils et ce qu'il reste à faire pour un marchand sans vente", async () => {
++    const { app, headers } = await boot();
++    const score = (await app.inject({ method: "GET", url: "/api/score", headers })).json();
++    expect(score).toMatchObject({
++      eligible: false,
++      score: null,
++      band: null,
++      demo: false,
++      thresholds: { days: 14, sales: 20 },
++      remaining: { days: 14, sales: 20 },
++    });
++  });
++
++  it("refuse l'attestation d'un marchand inéligible avec ce qu'il lui reste à faire", async () => {
++    const { app, db, headers, merchantId } = await boot();
++    const none = await app.inject({ method: "POST", url: "/api/score/share", headers });
++    expect(none.statusCode).toBe(422);
++    expect(none.json().error).toBe("NOT_ELIGIBLE");
++    expect(none.json().message).toBe("Attestation indisponible. Encore 20 ventes payées et 14 jours pour être éligible.");
++    expect(none.json().remaining).toEqual({ days: 14, sales: 20 });
++
++    sellOverDays(db, merchantId, 19, 20);
++    const salesOnly = await app.inject({ method: "POST", url: "/api/score/share", headers });
++    expect(salesOnly.statusCode).toBe(422);
++    expect(salesOnly.json().message).toBe("Attestation indisponible. Encore 1 vente payée pour être éligible.");
++
++    const count = () => (db.prepare("SELECT COUNT(*) AS n FROM score_shares").get() as { n: number }).n;
++    expect(count()).toBe(0);
++  });
++
++  it("refuse quand il y a assez de ventes mais pas assez de jours", async () => {
++    const { app, db, headers, merchantId } = await boot();
++    sellOverDays(db, merchantId, 25, 3);
++    const res = await app.inject({ method: "POST", url: "/api/score/share", headers });
++    expect(res.statusCode).toBe(422);
++    expect(res.json().message).toBe("Attestation indisponible. Encore 11 jours pour être éligible.");
++    expect(res.json().remaining).toEqual({ days: 11, sales: 0 });
++  });
++
++  it("ne compte ni les factures expirées ni celles en attente", async () => {
++    const { app, db, headers, merchantId } = await boot();
++    sellOverDays(db, merchantId, 19, 20);
++    insertSale(db, merchantId, { amountXof: 1000, at: new Date(clock.now.getTime() - 3_600_000), status: "pending" });
++    insertSale(db, merchantId, { amountXof: 1000, at: new Date(clock.now.getTime() - 3_600_000), status: "expired" });
++    const res = await app.inject({ method: "POST", url: "/api/score/share", headers });
++    expect(res.statusCode).toBe(422);
++    expect(res.json().remaining.sales).toBe(1);
++  });
++
++  it("émet une attestation datée, identifiée et sans donnée personnelle", async () => {
++    const { app, db, headers, merchantId } = await boot();
++    sellOverDays(db, merchantId, 25, 20);
++    insertSale(db, merchantId, { amountXof: 4000, at: new Date(clock.now.getTime() - 3_600_000), status: "expired" });
++    insertSale(db, merchantId, { amountXof: 4000, at: new Date(clock.now.getTime() - 3_600_000), status: "pending" });
++
++    const share = await app.inject({ method: "POST", url: "/api/score/share", headers });
++    expect(share.statusCode).toBe(200);
++    expect(share.json().url).toMatch(/^https:\/\/demo\.example\/s\/[A-Za-z0-9_-]{43}$/);
++    const token = String(share.json().url).split("/s/")[1];
++
++    const res = await app.inject({ method: "GET", url: `/api/public/shares/${token}` });
++    expect(res.statusCode).toBe(200);
++    const body = res.json();
++    expect(Object.keys(body).sort()).toEqual(
++      ["attestationId", "band", "demo", "environment", "expiresAt", "issuedAt", "period", "salesCount", "score", "shopName", "status", "totalXof", "windowDays"].sort(),
++    );
++    expect(body).toMatchObject({
++      shopName: "Chez Awa",
++      status: "valid",
++      demo: false,
++      environment: "mock",
++      salesCount: 25,
++      totalXof: 25_000,
++      windowDays: 90,
++      issuedAt: clock.now.toISOString(),
++      expiresAt: new Date(clock.now.getTime() + 7 * DAY).toISOString(),
++      period: { from: "2026-09-27", to: "2026-10-17" },
++    });
++    expect(body.attestationId).toMatch(/^JK-[A-HJ-NP-Z2-9]{4}-[A-HJ-NP-Z2-9]{4}$/);
++    expect(typeof body.score).toBe("number");
++    expect(["A", "B", "C", "D"]).toContain(body.band);
++    expect(JSON.stringify(body)).not.toMatch(/phone|payer|nickname|221|771234567|token|bolt11/i);
++  });
++
++  it("étiquette comme démonstration l'attestation d'un compte avec historique simulé", async () => {
++    const db = openDatabase(":memory:");
++    const { app, config } = await bootApp(clock, db);
++    apps.push(app);
++    seedDemo(db, config);
++    const login = await app.inject({ method: "POST", url: "/api/auth/login", payload: { phone: "771234567", pin: "482915" } });
++    const headers = { authorization: `Bearer ${login.json().token as string}` };
++    expect((await app.inject({ method: "GET", url: "/api/score", headers })).json().demo).toBe(true);
++    const share = await app.inject({ method: "POST", url: "/api/score/share", headers });
++    expect(share.statusCode).toBe(200);
++    const token = String(share.json().url).split("/s/")[1];
++    const body = (await app.inject({ method: "GET", url: `/api/public/shares/${token}` })).json();
++    expect(body.demo).toBe(true);
++    expect(body.shopName).toBe("Awa Beauté");
++    expect((await app.inject({ method: "GET", url: "/api/dashboard?range=30d", headers })).json().demo).toBe(true);
++  });
++
++  it("reflète l'expiration, la révocation et un lien inconnu", async () => {
++    const { app, db, headers, merchantId } = await boot();
++    sellOverDays(db, merchantId, 25, 20);
++    const share = await app.inject({ method: "POST", url: "/api/score/share", headers });
++    const token = String(share.json().url).split("/s/")[1];
++    const read = async () => (await app.inject({ method: "GET", url: `/api/public/shares/${token}` })).json();
++
++    expect((await read()).status).toBe("valid");
++    clock.now = new Date(clock.now.getTime() + 7 * DAY + 1000);
++    const expired = await read();
++    expect(expired.status).toBe("expired");
++    expect(expired.score).not.toBeNull();
++
++    clock.now = new Date(clock.now.getTime() - 5 * DAY);
++    db.prepare("UPDATE score_shares SET revoked = 1 WHERE token_id = ?").run(token);
++    const revoked = await read();
++    expect(revoked.status).toBe("revoked");
++    expect(revoked).toMatchObject({ score: null, band: null, salesCount: null, totalXof: null, period: null });
++    expect(revoked.shopName).toBe("Chez Awa");
++
++    const unknown = await app.inject({ method: "GET", url: "/api/public/shares/inconnu" });
++    expect(unknown.statusCode).toBe(404);
++    expect(unknown.json().error).toBe("NOT_FOUND");
++  });
++
++  it("ne garde une trace en base que des attestations émises", async () => {
++    const { app, db, headers, merchantId } = await boot();
++    sellOverDays(db, merchantId, 25, 20);
++    await app.inject({ method: "GET", url: "/api/score", headers });
++    await app.inject({ method: "GET", url: "/api/score", headers });
++    const rows = () => (db.prepare("SELECT COUNT(*) AS n FROM credit_scores").get() as { n: number }).n;
++    expect(rows()).toBe(0);
++    await app.inject({ method: "POST", url: "/api/score/share", headers });
++    expect(rows()).toBe(1);
++  });
++
++  it("révoque à la migration les liens émis avant l'identifiant et le périmètre vérifiables", () => {
++    const dir = mkdtempSync(join(tmpdir(), "jk-migrate-"));
++    const path = join(dir, "old.db");
++    try {
++      const old = openDatabase(path);
++      old.exec("ALTER TABLE score_shares DROP COLUMN snapshot");
++      old.prepare("INSERT INTO score_shares (token_id, merchant_id, score_id, expires_at, revoked) VALUES ('legacy', 'm', 's', '2099-01-01T00:00:00.000Z', 0)").run();
++      old.pragma("user_version = 2");
++      old.close();
++
++      const migrated = openDatabase(path);
++      const columns = (migrated.prepare("PRAGMA table_info(score_shares)").all() as { name: string }[]).map((c) => c.name);
++      expect(columns).toContain("snapshot");
++      expect(migrated.prepare("SELECT revoked FROM score_shares WHERE token_id = 'legacy'").get()).toEqual({ revoked: 1 });
++      expect(migrated.pragma("user_version", { simple: true })).toBe(3);
++      migrated.close();
++    } finally {
++      rmSync(dir, { recursive: true, force: true });
++    }
++  });
++});
+diff --git a/test/dashboard-http.test.ts b/test/dashboard-http.test.ts
+index 0e76ee9..b2e1a82 100644
+--- a/test/dashboard-http.test.ts
++++ b/test/dashboard-http.test.ts
+@@ -14,7 +14,7 @@ describe("dashboard et score HTTP", () => {
+     await Promise.all(apps.splice(0).map((app) => app.close()));
+   });
+ 
+-  it("sert le score, le tableau et une attestation sans montants", async () => {
++  it("sert le score, le tableau et une attestation sans donnée personnelle", async () => {
+     const db = openDatabase(":memory:");
+     const config: AppConfig = {
+       nodeEnv: "test",
+@@ -71,7 +71,9 @@ describe("dashboard et score HTTP", () => {
+     expect(body.shopName).toBe("Awa Beauté");
+     expect(body.band).toBe("B");
+     expect(body.status).toBe("valid");
+-    expect(body.period).toBe("90 jours");
+-    expect(JSON.stringify(body)).not.toMatch(/amount|payer|phone/i);
++    expect(body.windowDays).toBe(90);
++    expect(body.demo).toBe(true);
++    expect(body.period.to).toBe("2026-10-17");
++    expect(JSON.stringify(body)).not.toMatch(/amountXof|payer|phone/i);
+   });
+ });
+diff --git a/test/demo-pay.test.ts b/test/demo-pay.test.ts
+index 838b00f..8581e7f 100644
+--- a/test/demo-pay.test.ts
++++ b/test/demo-pay.test.ts
+@@ -485,7 +485,7 @@ describe("DEMO_PAY_MODE", () => {
+     created.pragma("user_version = 1");
+     created.close();
+     const db = openDatabase(path);
+-    expect(db.pragma("user_version", { simple: true })).toBe(2);
++    expect(db.pragma("user_version", { simple: true })).toBe(3);
+     const columns = db.prepare("PRAGMA table_info(invoices)").all() as { name: string }[];
+     expect(columns.map((column) => column.name)).toContain("simulated_method");
+     db.close();
+-- 
+2.47.3
+
