@@ -144,7 +144,7 @@ Quotas par minute et par IP : `POST /api/auth/register` et `POST /api/auth/login
 
 ### Score
 
-`{ score, band, eligible, computedAt, progress: { daysSinceFirst, salesCount }, components: [{ key, value }], actions: [{ text, points }] }`. `key` : `regularity | growth | volume | loyalty | quality`. `loyalty` est la fidélité du dossier. `value` entre 0 et 1.
+`{ score, band, eligible, computedAt, progress: { daysSinceFirst, salesCount }, components: [{ key, value }], actions: [{ text, points }] }`. `score` et `band` valent `null` tant que `eligible` est faux ; `eligible` exige au moins 14 jours et 20 ventes payées. `key` : `regularity | growth | volume | loyalty | quality`. `loyalty` est la fidélité du dossier. `value` entre 0 et 1.
 
 ### Solde, devis, retrait
 
