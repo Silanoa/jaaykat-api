@@ -1,6 +1,6 @@
 # Client Bitnob : état des paquets
 
-Le client signé de ce dépôt est `src/bitnob/live.ts`. Aucun paquet ne le remplace aujourd'hui.
+Le client Bitnob est le paquet `bitnob-lite` (dépôt `Silanoa/bitnob-lite`). `src/bitnob/live.ts`, `types.ts`, `errors.ts` et `webhooks.ts` ne font que le réexporter sous les noms historiques de l'API.
 
 ## jaakat-client (Dar-rius), analysé le 2026-10-18
 
@@ -10,14 +10,14 @@ Ce n'est pas un client Bitnob. C'est un client HTTP typé de l'API jaaykat (22 m
 
 Usage possible : couche d'appel de `jaaykat-web`, à la place de `src/lib/api.ts`. Son contrat était en retard sur l'API actuelle : attestation (`attestationId`, `issuedAt`, `period` en objet, `totalXof`, `demo`, `environment`), score (`demo`, `thresholds`, `remaining`), solde (`demoRevenueXof`, `demoSalesCount`) et moyen de paiement `yas`. Sur une API actuelle, `public.pay("yas")` et `public.attestation()` échouent en `UNEXPECTED`. Un correctif est préparé sur une branche locale `jk-contract-sync` (69 tests verts) et n'est pas poussé sur le dépôt de Dar-rius.
 
-## @silanoa/bitnob-lite
+## bitnob-lite (le SDK Bitnob)
 
-Pas branché. Si le paquet est un jour utilisé, le seul fichier à changer est `src/bitnob/factory.ts` :
+Extrait de l'ancien `src/bitnob/live.ts` : signature HMAC-SHA256, requêtes avec reprises (GET, HEAD et création de facture Lightning par `reference` seulement), factures avec `auto_settle` et relecture, clients, soldes, taux, retraits (devis, `initialize` et `finalize` par `quote_id`), `quoteForSettlement` (nouveau devis avec `ceil`), vérification de webhook HMAC-SHA512 (`x-bitnob-signature`), erreurs typées. Le paquet ne contient ni secret ni référence à ce projet.
 
-```ts
-import { BitnobClient as LiveBitnobClient } from "@silanoa/bitnob-lite";
-```
+État : version 0.1.0, dépendance locale `"bitnob-lite": "file:../bitnob-lite"` dans `package.json` (le dépôt `bitnob-lite` doit être cloné à côté). Elle passera à une version npm dès que le paquet sera publié ; ce n'est pas encore le cas.
 
-Le constructeur attendu est `new BitnobClient({ clientId, clientSecret, baseUrl, onRequest })`. Avant de le brancher, rejouer `test/live-client.test.ts` et `test/live-payouts.test.ts` contre lui : ils fixent la signature, les reprises (GET et création de facture par `reference` seulement), le `quote_id` des retraits et le bénéficiaire complet.
+Ce qui reste dans l'API : `factory.ts` (mode mock ou live), `mock.ts`, `journal.ts` (journal `api_calls` branché sur `onRequest`), `environment.ts` (lecture de `whoami`) et `setDefaultResultOrder("ipv4first")` dans `live.ts` : Bitnob autorise les IP en IPv4 et le paquet n'impose pas ce réglage. Le re-devis du retrait passe par `quoteForSettlement`.
+
+Les tests `test/live-client.test.ts` et `test/live-payouts.test.ts` restent dans l'API et passent contre le paquet ; les tests du paquet sont dans son dépôt.
 
 `BITNOB_MODE=mock` utilise `MockBitnobClient` pour les tests et la CI. `BITNOB_MODE=live` utilise le client de la factory. Les secrets restent dans `.env`.
