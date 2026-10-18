@@ -55,8 +55,23 @@ export function ledgerOf(db: Database, merchantId: string, now: Date): { balance
   return { balanceXof, balanceSats };
 }
 
+export function demoSalesOf(db: Database, merchantId: string): { revenueXof: number; salesCount: number } {
+  const row = db
+    .prepare(
+      `SELECT COALESCE(SUM(amount_xof), 0) AS revenueXof, COUNT(*) AS salesCount
+       FROM invoices WHERE merchant_id = ? AND status = 'paid' AND source = 'seed'`,
+    )
+    .get(merchantId) as { revenueXof: number; salesCount: number };
+  return row;
+}
+
+function formatXof(value: number): string {
+  return `${new Intl.NumberFormat("fr-FR").format(value).replace(/[\u202f\u00a0]/g, "\u00a0")}\u00a0F`;
+}
+
 export function balanceView(db: Database, merchantId: string, now: Date) {
   const ledger = ledgerOf(db, merchantId, now);
+  const demo = demoSalesOf(db, merchantId);
   const lastPayouts = (
     db
       .prepare(
@@ -65,7 +80,7 @@ export function balanceView(db: Database, merchantId: string, now: Date) {
       )
       .all(merchantId) as { id: string; amountXof: number; network: SnNetwork; status: PayoutRow["status"]; createdAt: string }[]
   );
-  return { ...ledger, lastPayouts };
+  return { ...ledger, demoRevenueXof: demo.revenueXof, demoSalesCount: demo.salesCount, lastPayouts };
 }
 
 export async function quotePayout(
@@ -91,7 +106,11 @@ export async function quotePayout(
   const now = config.now();
   const ledger = ledgerOf(db, merchantId, now);
   if (input.amountXof > ledger.balanceXof) {
-    throw new AppError(422, "INSUFFICIENT_BALANCE", "Solde insuffisant. L'historique simulé n'est pas retirable.");
+    const retirable = Math.max(0, ledger.balanceXof);
+    const demoNote = demoSalesOf(db, merchantId).salesCount > 0 ? " Le chiffre d'affaires de démonstration n'est pas retirable." : "";
+    throw new AppError(422, "INSUFFICIENT_BALANCE", `Solde retirable insuffisant : ${formatXof(retirable)} disponibles.${demoNote}`, {
+      retirableXof: retirable,
+    });
   }
   const merchant = db.prepare("SELECT id, slug, display_name, bitnob_customer_id FROM merchants WHERE id = ?").get(merchantId) as
     | { id: string; slug: string; display_name: string; bitnob_customer_id: string | null }
