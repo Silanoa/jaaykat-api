@@ -234,4 +234,27 @@ describe("retraits et ledger", () => {
     expect(bitnob.quoteRequests).toHaveLength(1);
   });
 
+
+  it("accepte yas comme nom du reseau free et cite Yas dans le refus d'un reseau inconnu", async () => {
+    const { app, db, token, merchantId } = await boot();
+    credit(db, merchantId, 10_000, "live");
+    const headers = { authorization: `Bearer ${token}` };
+    const yas = await app.inject({
+      method: "POST",
+      url: "/api/payouts/quote",
+      headers,
+      payload: { amountXof: 2000, network: "yas", accountNumber: "77 123 45 67", accountName: "Awa Diop" },
+    });
+    expect(yas.statusCode).toBe(200);
+    expect(yas.json().quote.network).toBe("free");
+    const bad = await app.inject({
+      method: "POST",
+      url: "/api/payouts/quote",
+      headers,
+      payload: { amountXof: 2000, network: "bogus", accountNumber: "77 123 45 67", accountName: "Awa Diop" },
+    });
+    expect(bad.statusCode).toBe(400);
+    expect(bad.json().fields.network).toContain("Yas");
+    expect(bad.json().fields.network).not.toContain("Free");
+  });
 });

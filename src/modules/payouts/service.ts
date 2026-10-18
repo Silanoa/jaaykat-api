@@ -75,16 +75,17 @@ export async function quotePayout(
   merchantId: string,
   input: { amountXof: number; network: string; accountNumber: string; accountName: string },
 ) {
+  const network = input.network === "yas" ? "free" : input.network;
   const fields: Record<string, string> = {};
   if (!Number.isInteger(input.amountXof) || input.amountXof < 100 || input.amountXof > 200_000) {
     fields.amountXof = "Entre 100 et 200 000 F";
   }
-  if (!isNetwork(input.network)) fields.network = "Choisissez Wave, Orange, Free ou Expresso";
+  if (!isNetwork(network)) fields.network = "Choisissez Wave, Orange, Yas ou Expresso";
   const account = normalizeAccount(input.accountNumber);
   if (!account) fields.accountNumber = "Numéro sénégalais invalide";
   const accountName = input.accountName.trim();
   if (accountName.length < 2 || accountName.length > 80) fields.accountName = "Nom du bénéficiaire requis";
-  if (Object.keys(fields).length > 0 || !account || !isNetwork(input.network)) {
+  if (Object.keys(fields).length > 0 || !account || !isNetwork(network)) {
     throw new AppError(400, "VALIDATION", "Vérifiez les champs.", { fields });
   }
   const now = config.now();
@@ -106,7 +107,7 @@ export async function quotePayout(
        id, merchant_id, reference, network, account_number_masked, account_name, amount_xof,
        from_asset, status, created_at, updated_at
      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'quoted', ?, ?)`,
-    ).run(id, merchantId, reference, input.network, masked, accountName, input.amountXof, config.payoutFromAsset, createdAt, createdAt);
+    ).run(id, merchantId, reference, network, masked, accountName, input.amountXof, config.payoutFromAsset, createdAt, createdAt);
   pendingAccounts.set(id, account);
 
   try {
