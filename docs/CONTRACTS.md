@@ -4,7 +4,7 @@ Version : `2026-10-17` — alignée sur le dossier projet Jaaykat v2.
 
 ## 1. Client Bitnob
 
-Le client Bitnob est le paquet `bitnob-lite` (HMAC sortante, reprises, `onRequest` vers le journal `api_calls`, voir ci-dessous), réexporté par `src/bitnob/live.ts`. Il est branché par dépendance locale (`file:../bitnob-lite`) tant qu'il n'est pas publié sur npm. `jaakat-client` (Dar-rius) n'est pas un client Bitnob : c'est un client de l'API Jaaykat. Voir `docs/SDK_SWAP.md`.
+Le client Bitnob est le paquet `bitnob-lite` (HMAC sortante, reprises, `onRequest` vers le journal `api_calls`, voir ci-dessous), réexporté par `src/bitnob/live.ts`. Il est installé depuis npm (`bitnob-lite@^0.1.0`). `jaakat-client` (Dar-rius) n'est pas un client Bitnob : c'est un client de l'API Jaaykat. Voir `docs/SDK_SWAP.md`.
 
 Reprises automatiques côté Bitnob (2 reprises, sur erreur réseau, 429 ou 5xx) : les lectures GET, et la création de facture Lightning parce qu'elle porte une `reference` (même référence, même facture, constaté en sandbox). Devis, initialisation et finalisation de retrait ne sont jamais rejoués automatiquement. Le journal `api_calls` garde les 500 derniers appels.
 

@@ -14,7 +14,7 @@ Usage possible : couche d'appel de `jaaykat-web`, à la place de `src/lib/api.ts
 
 Extrait de l'ancien `src/bitnob/live.ts` : signature HMAC-SHA256, requêtes avec reprises (GET, HEAD et création de facture Lightning par `reference` seulement), factures avec `auto_settle` et relecture, clients, soldes, taux, retraits (devis, `initialize` et `finalize` par `quote_id`), `quoteForSettlement` (nouveau devis avec `ceil`), vérification de webhook HMAC-SHA512 (`x-bitnob-signature`), erreurs typées. Le paquet ne contient ni secret ni référence à ce projet.
 
-État : version 0.1.0, dépendance locale `"bitnob-lite": "file:../bitnob-lite"` dans `package.json` (le dépôt `bitnob-lite` doit être cloné à côté). Elle passera à une version npm dès que le paquet sera publié ; ce n'est pas encore le cas.
+État : `bitnob-lite` 0.1.0 est publié sur npm (https://www.npmjs.com/package/bitnob-lite, tag `v0.1.0` sur `Silanoa/bitnob-lite`). `package.json` dépend de `"bitnob-lite": "^0.1.0"`, résolu depuis le registre dans `pnpm-lock.yaml`.
 
 Ce qui reste dans l'API : `factory.ts` (mode mock ou live), `mock.ts`, `journal.ts` (journal `api_calls` branché sur `onRequest`), `environment.ts` (lecture de `whoami`) et `setDefaultResultOrder("ipv4first")` dans `live.ts` : Bitnob autorise les IP en IPv4 et le paquet n'impose pas ce réglage. Le re-devis du retrait passe par `quoteForSettlement`.
 

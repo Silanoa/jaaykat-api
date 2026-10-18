@@ -1,6 +1,6 @@
 # jaaykat-api
 
-Backend Jaaykat : Fastify, SQLite et Bitnob via le paquet `bitnob-lite` (dépendance locale `file:../bitnob-lite` : cloner `Silanoa/bitnob-lite` à côté de ce dépôt, `npm install && npm run build` dedans). `jaakat-client` de Dar-rius est un client de cette API, pas du SDK Bitnob. Détails dans `docs/SDK_SWAP.md`.
+Backend Jaaykat : Fastify, SQLite et Bitnob via le paquet npm `bitnob-lite` (client Bitnob non officiel, dépôt `Silanoa/bitnob-lite`). `jaakat-client` de Dar-rius est un client de cette API, pas du SDK Bitnob. Détails dans `docs/SDK_SWAP.md`.
 
 Dépôts liés : [bitnob-lite](https://github.com/Silanoa/bitnob-lite) et [jaaykat-web](https://github.com/Silanoa/jaaykat-web).
 
