@@ -6,8 +6,6 @@ Repos d’entrée soumission : ce repo + [bitnob-lite](https://github.com/Silano
 
 ## Docs
 
-- [Design](./docs/superpowers/specs/2026-10-17-jaaykat-api-design.md)
-- [Plan](./docs/superpowers/plans/2026-10-17-jaaykat-api-implementation.md)
 - [DEPLOY.md](./docs/DEPLOY.md)
 - [CONTRACTS.md](./docs/CONTRACTS.md)
 
